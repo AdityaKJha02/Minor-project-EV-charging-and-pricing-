@@ -1,0 +1,133 @@
+function [dist, nextHop] = floydWarshallNextHop(dist)
+%FLOYDWARSHALLNEXTHOP All-pairs shortest path (Floyd–Warshall)
+% with next-hop matrix for path reconstruction
+%
+% INPUT:
+%   dist    - NxN distance matrix
+%             (Inf = no edge, 0 on diagonal)
+%
+% OUTPUT:
+%   dist    - shortest-path distance matrix
+%   nextHop - next-hop matrix
+minSOC          = 60;
+maxSOC          = 85;
+consRate        = 1;     % %SOC per "distance unit"
+chargeThreshold = 55;
+stopSOC         = 20;
+
+
+
+numStations_req = 6;        % number of stations desired
+maxGreedyIter    = 1000;
+
+% Robust greedy settings
+robustGreedySeed = 42;      % fixed seed base to make greedy repeatable
+nGreedyMCtrials  = 8;       % number of MC trials to average per candidate
+
+% --- vehicles per OD (flexible modes)
+maxVehiclesPerOD    = 50;   % legacy upper bound (still used in helpers)
+vehiclesMode.type   = 'perOD_scalar'; % 'perOD_scalar','perOD_vector','perOD_hourly','stochastic'
+vehiclesMode.scalar = 150;           % baseline EVs per OD per hour
+vehiclesMode.dist   = 'poisson';
+vehiclesMode.lambda = 80;            % mean for poisson (if stochastic)
+
+% --- Time resolution: 1-hour slots, charging continuous (minutes)
+slotDur_min = 60;          % 1 hour per slot
+hoursInDay  = 24;
+slotsPerDay = hoursInDay;  % exactly 24 slots
+plotPoints  = slotsPerDay; % show all 24 hours
+
+% --- Pricing & economics
+gridCost_RsPerkWh = 9.5;
+flatPrice         = 12;     % Rs/kWh baseline
+
+% ToU: same pattern as before, but directly hourly
+ToU_rate = flatPrice * ones(24,1);
+ToU_rate(18:21) = flatPrice * 1.7;  % evening higher (18–21 h)
+
+CPP_hours     = [18,19];    % critical peak hours
+CPP_surcharge = 30;         % Rs/kWh surcharge during CPP hours
+
+% --- Feeder/grid capacity (will be set after K is known)
+gridCapacity_kW = NaN;      % placeholder; updated after greedy siting
+
+% --- PSO for dynamic pricing
+pso_nParticles = 20;
+pso_nIter      = 120;
+minPrice_kWh   = 9;
+maxPrice_kWh   = 28;
+
+% Keep profit dominant but include soft penalties
+betaWait       = 500;    % penalty on waiting (estimated)
+betaPeak       = 2000;   % penalty on peak above gridCapacity
+
+% --- Charger hardware
+battery_kWh         = 59;    % Mahindra BE.6
+range_km            = 557;
+numAC               = 0;     % AC ports per station
+numDC               = 5;     % DC ports per station
+DC_power            = 75;    % kW (nameplate)
+full_charge_minutes = 35;    % DC taper 0->100% in 35 min
+kmPerUnit           = 2;     % km / "distance unit"
+speed_kmh           = 60;    % driving speed for arrival time
+
+% --- economic constants
+gamma       = 0.01;
+plugCostDC  = 10000;
+investmentPerStation = numDC * plugCostDC;
+
+% --- dynamic dispatch attraction parameter (minutes per Rs)
+lambdaPrice_min = 2.0;   % higher -> price matters more vs waiting
+
+% --- ghost station fix now disabled (no fake events)
+minEventsPerStation = 0;
+
+% --- background station load (kW) if you want
+backgroundLoadPerStation_kW = 0.0; % keep 0 so station-load plots are clean
+
+% safety
+maxSimVehiclesTotal = 50000;
+
+%% -------------------- Read required files --------------------
+fprintf('Reading input files...\n');
+
+% distance matrix
+M = readmatrix('distance_matrix.xlsx');
+M = M(~all(isnan(M),2), ~all(isnan(M),1));
+M(isnan(M)) = Inf;
+n = size(M,1);
+M(1:n+1:end) = 0;
+offdiag = true(n); offdiag(1:n+1:end) = false;
+M(offdiag & M==0) = Inf;
+M = min(M, M.');
+M(1:n+1:end) = 0;
+dist = M;  % graph units
+    n = size(dist,1);
+
+    % Initialize nextHop
+    nextHop = zeros(n);
+    for i = 1:n
+        for j = 1:n
+            if i ~= j && isfinite(dist(i,j))
+                nextHop(i,j) = j;
+            end
+        end
+    end
+
+    % Floyd–Warshall core
+    for k = 1:n
+        dik = dist(:,k);
+        skj = dist(k,:);
+        for i = 1:n
+            if ~isfinite(dik(i)), continue; end
+            for j = 1:n
+                if ~isfinite(skj(j)), continue; end
+                newDist = dik(i) + skj(j);
+                if newDist < dist(i,j)
+                    dist(i,j)    = newDist;
+                    nextHop(i,j) = nextHop(i,k);
+                end
+            end
+        end
+    end
+end
