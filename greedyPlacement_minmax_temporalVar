@@ -117,7 +117,14 @@ for hr = 1:24
         p = taskPaths{t};
         if isempty(p), continue; end
 
-        soc = minSOC + (maxSOC-minSOC).*rand(numEVs,1);
+        muSOC    = (minSOC + maxSOC)/2;          % 72.5
+sigmaSOC = (maxSOC - minSOC)/(2*1.96);   % ≈ 6.38
+
+soc = muSOC + sigmaSOC*randn(numEVs,1);
+
+% hard clamp to physical bounds
+soc = min(max(soc, minSOC), maxSOC);
+
         stopped = false(numEVs,1);
 
         for k = 1:(numel(p)-1)
