@@ -1,0 +1,106 @@
+clc; clear; close all;
+rng(70);   % fixed seed for reproducibility
+
+%% =========================================================
+%% 1. SHORTEST PATHS (YOUR WORKING FILE – UNCHANGED)
+%% =========================================================
+M = readmatrix('distance_matrix.xlsx');
+M(M==0) = Inf;
+M(1:size(M,1)+1:end) = 0;
+
+[dist, nextHop] = floydWarshallNextHop(M);
+
+%% =========================================================
+%% 2. READ OD PAIRS (UNCHANGED LOGIC)
+%% =========================================================
+txt = extractFileText('OD nodes.docx');
+pairs = regexp(txt,'\((\d+)\s*,\s*(\d+)\)','tokens');
+
+OD = cellfun(@(c)[str2double(c{1}) str2double(c{2})], ...
+             pairs, 'UniformOutput', false);
+OD = vertcat(OD{:});
+
+%% =========================================================
+%% 3. BUILD TASK PATHS (UNCHANGED)
+%% =========================================================
+taskPaths = cell(size(OD,1),1);
+for i = 1:size(OD,1)
+    taskPaths{i} = localPath(OD(i,1), OD(i,2), nextHop);
+end
+
+%% =========================================================
+%% 4. CANDIDATE EDGES (UNCHANGED)
+%% =========================================================
+candidateEdges = [];
+for i = 1:numel(taskPaths)
+    p = taskPaths{i};
+    if numel(p) > 1
+        candidateEdges = [candidateEdges; [p(1:end-1)' p(2:end)']];
+    end
+end
+candidateEdges = unique(candidateEdges,'rows');
+fprintf('Found %d candidate edges from tasks.\n', size(candidateEdges,1));
+
+%% =========================================================
+%% 5. LOAD POWER DATA (NEW – REQUIRED FOR TEMPORAL VARIANCE)
+%% =========================================================
+
+% --- IEEE 69-bus 24h active power data (69 x 24)
+baseLoad24h = readmatrix('IEEE69_24h active data.xlsx');
+
+% --- Edge → Bus mapping
+% Expected format: [fromNode  toNode  busIndex]
+edgeToBus = readmatrix('Bus to edge mapping.xlsx');
+
+%% =========================================================
+%% 6. PARAMETERS (SAME AS YOUR OLD CODE)
+%% =========================================================
+numEVs = 150;
+consRate = 1;
+
+minSOC = 60;
+maxSOC = 85;
+chargeThreshold = 55;
+stopSOC = 20;
+
+battery_kWh = 59;
+
+numStations = 6;
+
+wCharge = 1.0;
+wStop   = 1.0;
+wVar    = 0.3;
+
+maxGreedyIter = 1000;
+
+%% =========================================================
+%% 7. RUN GREEDY (UPDATED CALL SIGNATURE)
+%% =========================================================
+[chosenEdges, history] = greedyPlacement_minmax_temporalVar( ...
+    candidateEdges, taskPaths, OD, dist, ...
+    consRate, numEVs, minSOC, maxSOC, ...
+    chargeThreshold, stopSOC, ...
+    numStations, wCharge, wStop, wVar, ...
+    maxGreedyIter, battery_kWh, ...
+    baseLoad24h, edgeToBus);
+
+%% =========================================================
+%% 8. FINAL OUTPUT
+%% =========================================================
+disp('Selected EVFCS edges:');
+disp(chosenEdges);
+
+%% =========================================================
+%% LOCAL HELPER (UNCHANGED)
+%% =========================================================
+function path = localPath(u, v, nextHop)
+path = u;
+while u ~= v
+    u = nextHop(u, v);
+    if u == 0
+        path = [];
+        return;
+    end
+    path(end+1) = u; %#ok<AGROW>
+end
+end
