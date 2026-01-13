@@ -53,9 +53,24 @@ baseLoad24h = readmatrix('IEEE69_24h active data.xlsx');
 edgeToBus = readmatrix('Bus to edge mapping.xlsx');
 
 %% =========================================================
+%% 5B. LOAD HOURLY VEHICLE FLOW (PER-UNIT → ABSOLUTE)
+%% =========================================================
+
+% 24 × 1 per-unit vehicle flow (0–1)
+vehFlow_pu = readmatrix('24hr_vehicles.xlsx');
+
+if numel(vehFlow_pu) ~= 24
+    error('Vehicle flow file must contain 24 hourly values');
+end
+
+maxEVsPerHour = 50;                % p.u. = 1 corresponds to 50 EVs
+numEVs_hourly = round(maxEVsPerHour * vehFlow_pu(:));
+
+fprintf('Hourly EV flow loaded (max = %d EV/h)\n', maxEVsPerHour);
+
+%% =========================================================
 %% 6. PARAMETERS (SAME AS YOUR OLD CODE)
 %% =========================================================
-numEVs = 150;
 consRate = 1;
 
 minSOC = 60;
@@ -72,17 +87,19 @@ wStop   = 1.0;
 wVar    = 0.3;
 
 maxGreedyIter = 1000;
+disp(numEVs_hourly.')
 
 %% =========================================================
 %% 7. RUN GREEDY (UPDATED CALL SIGNATURE)
 %% =========================================================
 [chosenEdges, history] = greedyPlacement_minmax_temporalVar( ...
     candidateEdges, taskPaths, OD, dist, ...
-    consRate, numEVs, minSOC, maxSOC, ...
+    consRate, numEVs_hourly, minSOC, maxSOC, ...
     chargeThreshold, stopSOC, ...
     numStations, wCharge, wStop, wVar, ...
     maxGreedyIter, battery_kWh, ...
     baseLoad24h, edgeToBus);
+
 
 %% =========================================================
 %% 8. FINAL OUTPUT
@@ -103,4 +120,25 @@ while u ~= v
     end
     path(end+1) = u; %#ok<AGROW>
 end
+end
+
+
+%% =========================================================
+%% 9. CHARGE SOLD & TIME PER STATION
+%% =========================================================
+
+stationStats = simulateStationSalesAndTime( ...
+    chosenEdges, taskPaths, dist, ...
+    consRate, numEVs_hourly, minSOC, maxSOC, ...
+    chargeThreshold, stopSOC, battery_kWh);
+
+
+fprintf('\n=== STATION SALES SUMMARY ===\n');
+for k = 1:numel(stationStats)
+    fprintf('Station %d (edge %d->%d): ', k, ...
+        stationStats(k).edge(1), stationStats(k).edge(2));
+    fprintf('Energy = %.2f kWh | Time = %.1f min | Sessions = %d\n', ...
+        stationStats(k).energy_kWh, ...
+        stationStats(k).time_min, ...
+        stationStats(k).numCharges);
 end
