@@ -1,0 +1,80 @@
+function stationStats = simulateStationSalesAndTime( ...
+    stationEdges, taskPaths, dist, ...
+    consRate, numEVs, minSOC, maxSOC, ...
+    chargeThreshold, stopSOC, battery_kWh)
+
+K = size(stationEdges,1);
+
+stationEnergy_pct = zeros(K,1);
+stationTime_min   = zeros(K,1);
+stationCount      = zeros(K,1);
+
+keys = arrayfun(@(i) sprintf('%d-%d',stationEdges(i,1),stationEdges(i,2)), ...
+                1:K,'UniformOutput',false);
+
+for hr = 1:24
+
+    numEVs_hr = numEVs(hr);
+
+    % stop completely if flow is zero
+    if numEVs_hr == 0
+        break;
+    end
+
+    for t = 1:numel(taskPaths)
+        p = taskPaths{t};
+        if isempty(p), continue; end
+
+        % --- initial SOC distribution ---
+        muSOC    = (minSOC + maxSOC)/2;
+        sigmaSOC = (maxSOC - minSOC)/(2*1.96);
+        soc = muSOC + sigmaSOC*randn(numEVs_hr,1);
+        soc = min(max(soc, minSOC), maxSOC);
+
+        stopped = false(numEVs_hr,1);
+
+        for k = 1:(numel(p)-1)
+            u = p(k); v = p(k+1);
+            d = dist(u,v);
+
+            idx = find(strcmp(keys,sprintf('%d-%d',u,v)) | ...
+                       strcmp(keys,sprintf('%d-%d',v,u)),1);
+
+            if ~isempty(idx)
+                distRem = sum(arrayfun(@(x) dist(p(x),p(x+1)), k:numel(p)-1));
+                neededSOC = distRem * consRate;
+
+                mask = soc < chargeThreshold;
+                SOC_in  = soc(mask);
+                SOC_out = max(SOC_in, neededSOC);
+
+                deltaSOC = SOC_out - SOC_in;
+
+                stationEnergy_pct(idx) = stationEnergy_pct(idx) + sum(deltaSOC);
+
+                for i = 1:numel(SOC_in)
+                    stationTime_min(idx) = stationTime_min(idx) + ...
+                        charging_time(SOC_in(i), SOC_out(i));
+                end
+
+                stationCount(idx) = stationCount(idx) + sum(mask);
+                soc(mask) = SOC_out;
+            end
+
+            soc = soc - d*consRate;
+            newStops = (soc < stopSOC) & ~stopped;
+            stopped(newStops) = true;
+            soc(stopped) = stopSOC;
+        end
+    end
+end
+
+stationEnergy_kWh = stationEnergy_pct/100 * battery_kWh;
+
+for k = 1:K
+    stationStats(k).edge        = stationEdges(k,:);
+    stationStats(k).energy_kWh  = stationEnergy_kWh(k);
+    stationStats(k).time_min    = stationTime_min(k);
+    stationStats(k).numCharges  = stationCount(k);
+end
+end
