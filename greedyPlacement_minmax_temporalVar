@@ -113,6 +113,11 @@ keys = arrayfun(@(i) sprintf('%d-%d',stationEdges(i,1),stationEdges(i,2)), ...
                 1:K,'UniformOutput',false);
 
 for hr = 1:24
+        numEVs_hr = numEVs(hr);
+    if numEVs_hr == 0
+        continue;
+    end
+
     for t = 1:numel(taskPaths)
         p = taskPaths{t};
         if isempty(p), continue; end
@@ -120,12 +125,12 @@ for hr = 1:24
         muSOC    = (minSOC + maxSOC)/2;          % 72.5
 sigmaSOC = (maxSOC - minSOC)/(2*1.96);   % ≈ 6.38
 
-soc = muSOC + sigmaSOC*randn(numEVs,1);
+soc = muSOC + sigmaSOC*randn(numEVs_hr,1);
 
 % hard clamp to physical bounds
 soc = min(max(soc, minSOC), maxSOC);
 
-        stopped = false(numEVs,1);
+stopped = false(numEVs_hr,1);
 
         for k = 1:(numel(p)-1)
             u=p(k); v=p(k+1); d=dist(u,v);
