@@ -121,33 +121,36 @@ for hr = 1:24
                        targetSOC = min(maxSOC, max(soc_arrival, neededSOC));
                        deltaSOC_pct = max(0, targetSOC - soc_arrival); % percent to add
                        if deltaSOC_pct > 0
-                           % energy required (kWh)
-                           energy_req_kWh = (deltaSOC_pct/100) * battery_kWh;
-                           % charging time (minutes) using constant power model
-                           chargeTime_min = (energy_req_kWh / chargerPower_kW) * 60;
+                           % charging time (minutes) using SOC-based charging curve
+chargeTime_min = charging_time(soc_arrival, soc_arrival + deltaSOC_pct);
+
+% energy delivered (still useful for reporting)
+energy_req_kWh = (deltaSOC_pct/100) * battery_kWh;
+
                            % PORT ASSIGNMENT: check stationPortNextFree times
                            ports = stationPortNextFree{stationIdx};
                            % earliest port that is free at or before arrival
                            freeIdx = find(ports <= arrival_min, 1);
-                           if ~isempty(freeIdx)
-                               % immediate start on that port
-                               wait_min = 0;
-                               start_min = arrival_min;
-                               depart_min_event = start_min + chargeTime_min;
-                               ports(freeIdx) = depart_min_event;
-                               stationPortNextFree{stationIdx} = ports;
-                           else
-                               % all ports busy; compute the earliest port free time
-                               [nextFreeTime, nextPortIdx] = min(ports);
-                               wait_min = max(0, nextFreeTime - arrival_min);
-                               start_min = arrival_min + wait_min;
-                               depart_min_event = start_min + chargeTime_min;
-                               ports(nextPortIdx) = depart_min_event;
-                               stationPortNextFree{stationIdx} = ports;
-                           end
+
+if ~isempty(freeIdx)
+    portUsed = freeIdx;          % ✅ STORE PORT NUMBER
+    wait_min = 0;
+    start_min = arrival_min;
+else
+    [nextFreeTime, portUsed] = min(ports);   % ✅ STORE PORT NUMBER
+    wait_min = nextFreeTime - arrival_min;
+    start_min = nextFreeTime;
+end
+
+depart_min_event = start_min + chargeTime_min;
+ports(portUsed) = depart_min_event;
+stationPortNextFree{stationIdx} = ports;
+
+                           
                            % record event
                            evChargedTimes = evChargedTimes + 1;
                            evChargeEvents(end+1).station = stationIdx; %#ok<AGROW>
+                           evChargeEvents(end).port          = portUsed;
                            evChargeEvents(end).arrival_min = arrival_min;
                            evChargeEvents(end).wait_min = wait_min;
                            evChargeEvents(end).start_min = start_min;
@@ -180,20 +183,42 @@ for hr = 1:24
 end % hour loop
 % Convert eventRows / evList into tables for output
 % Build EVevents table where each row is a charging event
-rows = {};   % must be a cell array
+rows = {};
+
 for i = 1:numel(evList)
-   ev = evList(i);
-   for e = 1:numel(ev.chargeEvents)
-       ce = ev.chargeEvents(e);
-       rows(end+1,:) = { ev.evID, ev.odIndex, ce.station, ...
-           ev.depart_min + 0, ce.arrival_min, ce.wait_min, ...
-           ce.start_min, ce.charge_min, ce.depart_min, ...
-           ce.soc_before, ce.soc_after }; %#ok<AGROW>
-   end
+    ev = evList(i);
+
+    if isempty(ev.chargeEvents)
+        continue;
+    end
+
+    for e = 1:numel(ev.chargeEvents)
+        ce = ev.chargeEvents(e);
+
+        rows(end+1,:) = { ...
+            ev.evID, ...
+            ev.odIndex, ...
+            ce.station, ...
+            ce.port, ...
+            ce.arrival_min, ...
+            ce.wait_min, ...
+            ce.start_min, ...
+            ce.charge_min, ...
+            ce.depart_min, ...
+            ce.soc_before, ...
+            ce.soc_after ...
+        };
+    end
 end
+
+
 if isempty(rows)
    EVevents = table([],[],[],[],[],[],[],[],[],[],[], ...
-       'VariableNames', {'evID','odIndex','stationIdx','depart_min','arrival_min','wait_min','start_min','charge_min','depart_event_min','soc_before','soc_after'});
+       'VariableNames', {'EV_ID','OD_Index','Station_ID','Port_Number', ...
+ 'ArrivalTime_min','WaitingTime_min','ChargingStart_min', ...
+ 'ChargingDuration_min','ChargingEnd_min', ...
+ 'SOC_Arrival_pct','SOC_Departure_pct'})
+;
 else
    EVevents = cell2table(rows, 'VariableNames', ...
        {'evID','odIndex','stationIdx','depart_min','arrival_min','wait_min','start_min','charge_min','depart_event_min','soc_before','soc_after'});
@@ -250,6 +275,6 @@ end
 % --------------------------
 % --------------------------
 
-end
+
 
 
