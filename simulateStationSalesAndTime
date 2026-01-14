@@ -72,9 +72,27 @@ end
 stationEnergy_kWh = stationEnergy_pct/100 * battery_kWh;
 
 for k = 1:K
-    stationStats(k).edge        = stationEdges(k,:);
-    stationStats(k).energy_kWh  = stationEnergy_kWh(k);
-    stationStats(k).time_min    = stationTime_min(k);
-    stationStats(k).numCharges  = stationCount(k);
+    n = stationCount(k);
+
+    if n > 0
+        avgChargeTime_min = stationTime_min(k) / n;
+        avgEnergy_perEV_kWh = stationEnergy_kWh(k) / n;
+    else
+        avgChargeTime_min = 0;
+        avgEnergy_perEV_kWh = 0;
+    end
+
+    stationStats(k).edge = stationEdges(k,:);
+
+    % ---- EXISTING OUTPUTS ----
+    stationStats(k).energy_kWh = stationEnergy_kWh(k);   % total charge sold
+    stationStats(k).time_min   = stationTime_min(k);
+    stationStats(k).numCharges = stationCount(k);
+
+    % ---- NEW REQUESTED OUTPUTS ----
+    stationStats(k).chargeSold_kWh        = stationEnergy_kWh(k);
+    stationStats(k).avgChargingTime_min   = avgChargeTime_min;
+    stationStats(k).avgEnergyPerEV_kWh    = avgEnergy_perEV_kWh;
 end
+
 end
