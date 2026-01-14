@@ -156,6 +156,14 @@ for k = 1:numel(stationStats)
         stationStats(k).avgEnergyPerEV_kWh, ...
         stationStats(k).numCharges);
 end
+speed_kmh = 60;
+kmPerUnit = 2;
+portsPerStation = [4 2 2 1 1 1];
+
+generateEVFCSArrivalSchedule( ...
+    chosenEdges, stationStats, taskPaths, dist, ...
+    speed_kmh, kmPerUnit, portsPerStation, ...
+    minSOC, maxSOC, chargeThreshold, consRate, battery_kWh);
 
 
 
@@ -163,7 +171,7 @@ end
 %% 10. COMPUTE REQUIRED NUMBER OF CHARGING PORTS
 %% =========================================================
 
-maxPortHours = 20;  
+maxPortHours = 10;  
 
 portStats = computeChargingPorts(stationStats, maxPortHours);
 
@@ -178,3 +186,24 @@ for s = 1:numel(portStats)
         portStats(s).avgPortUsage_hr, ...
         portStats(s).utilization_pct);
 end
+
+
+% ================= EV TIMELINE PARAMETERS =================
+kmPerUnit      = 2;        % km per distance unit
+speed_kmh      = 60;       % EV speed
+chargerPower_kW = 75;      % DC fast charger power
+
+% ports per station (same order as chosenEdges)
+portsPerStation = [4 2 2 1 1 1];   % example (length = numStations)
+% =========================================================
+% EV ARRIVAL – WAITING – DEPARTURE TIME SIMULATION
+% =========================================================
+
+%% =========================================================
+%% 11. EV TIMELINE
+%% =========================================================
+[EVevents, EVsummary] = simulateEVTimeline( ...
+    OD, taskPaths, chosenEdges, dist, ...
+    numEVs_hourly, kmPerUnit, speed_kmh, ...
+    minSOC, maxSOC, chargeThreshold, stopSOC, consRate, ...
+    battery_kWh, chargerPower_kW, portsPerStation);
