@@ -1,0 +1,121 @@
+function generateEVFCSArrivalAndPowerTimeline_10min( ...
+    EVevents, chosenEdges, portsPerStation, battery_kWh)
+
+% =========================================================
+% GENERATEEVFCSARRIVALANDPOWERTIMELINE_10MIN
+%
+% Builds a 10-minute resolution timeline (144 rows/day)
+% for each EVFCS showing:
+%   - Which ports are active
+%   - Which EV is charging on which port
+%   - Instantaneous power using SOC-based curve
+%
+% OUTPUT:
+%   Excel file: EVFCS_10min_Arrival_Power.xlsx
+%   → 1 sheet per EVFCS
+% =========================================================
+
+dt = 10;                         % minutes
+Tday = 24 * 60;
+timeGrid = (0:dt:Tday-dt)';      % 144 rows
+
+numStations = size(chosenEdges,1);
+
+excelFile = 'EVFCS_10min_Arrival_Power.xlsx';
+if exist(excelFile,'file')
+    delete(excelFile);
+end
+
+% =========================================================
+% LOOP OVER STATIONS
+% =========================================================
+for s = 1:numStations
+
+    T = EVevents(EVevents.stationIdx == s, :);
+    if isempty(T), continue; end
+
+    nSlots = numel(timeGrid);
+
+    ActivePorts     = strings(nSlots,1);
+    ActiveEVs       = strings(nSlots,1);
+    StationPower_kW = zeros(nSlots,1);
+
+    % -----------------------------------------------------
+    % LOOP OVER TIME SLOTS
+    % -----------------------------------------------------
+    for k = 1:nSlots
+
+        t_now = timeGrid(k);
+
+        portsUsed = false(portsPerStation(s),1);
+        evOnPort  = strings(portsPerStation(s),1);
+        portPower = zeros(portsPerStation(s),1);
+
+        % -----------------------------------------------
+        % Check each charging event
+        % -----------------------------------------------
+        for e = 1:height(T)
+
+            t_start = T.start_min(e);
+            t_end   = T.depart_event_min(e);
+
+            if t_now >= t_start && t_now < t_end
+
+                p = T.port(e);
+                portsUsed(p) = true;
+                evOnPort(p)  = "EV" + T.evID(e);
+
+                % SOC-based power at this instant
+                elapsed = t_now - t_start;
+                [tvec, SOCvec, Pvec, ~] = chargingPowerAndEnergy( ...
+                    T.soc_before(e), T.soc_after(e), battery_kWh);
+
+                idx = find(tvec <= elapsed, 1, 'last');
+                if isempty(idx)
+                    idx = 1;
+                end
+
+                portPower(p) = Pvec(idx);
+            end
+        end
+
+        % -----------------------------------------------
+        % Record slot summary
+        % -----------------------------------------------
+        usedPorts = find(portsUsed);
+
+        if isempty(usedPorts)
+            ActivePorts(k) = "";
+            ActiveEVs(k)   = "";
+        else
+            ActivePorts(k) = strjoin(string(usedPorts'), ",");
+            ActiveEVs(k)   = strjoin(evOnPort(usedPorts)', ",");
+        end
+
+        StationPower_kW(k) = sum(portPower);
+    end
+
+    % -----------------------------------------------------
+    % Build output table
+    % -----------------------------------------------------
+    Hour   = floor(timeGrid/60);
+    Minute = mod(timeGrid,60);
+
+    Tout = table( ...
+        Hour, Minute, timeGrid, ...
+        ActivePorts, ActiveEVs, StationPower_kW, ...
+        'VariableNames', { ...
+        'Hour','Minute','Time_min', ...
+        'ActivePorts','EVsCharging','StationPower_kW'});
+
+    % -----------------------------------------------------
+    % Write sheet
+    % -----------------------------------------------------
+    sheetName = sprintf('EVFCS_%d_%d_%d', ...
+        s, chosenEdges(s,1), chosenEdges(s,2));
+
+    writetable(Tout, excelFile, 'Sheet', sheetName);
+end
+
+fprintf('✅ EVFCS 10-min arrival & power timeline written to %s\n', excelFile);
+end
