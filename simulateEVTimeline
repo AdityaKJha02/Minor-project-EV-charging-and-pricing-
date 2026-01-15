@@ -212,6 +212,11 @@ EVevents = cell2table(rows, 'VariableNames', ...
    {'evID','odIndex','stationIdx','port', ...
     'arrival_min','wait_min','start_min','charge_min', ...
     'depart_event_min','soc_before','soc_after'});
+% ---------------------------------------------------------
+% Energy consumed per charging event (kWh)
+% ---------------------------------------------------------
+EVevents.energy_kWh = ...
+    (EVevents.soc_after - EVevents.soc_before) .* battery_kWh / 100;
 
 % =========================================================
 % WRITE EXCEL FILE (ONE SHEET PER EVFCS)
@@ -260,10 +265,48 @@ for i = 1:numel(evList)
    EVsummary.numCharges(i) = e.numCharges;
    EVsummary.chargedMultipleTimes(i) = (e.numCharges > 1);
 end
-% --------------------------
-% Proof: show timing for first 5 EVs from each OD
-% --------------------------
-% --------------------------
+% =========================================================
+% PRINT TOTAL ENERGY SOLD PER EVFCS
+% =========================================================
+% =========================================================
+% STATION-LEVEL SUMMARY (PRINT TO COMMAND WINDOW)
+% =========================================================
+
+fprintf('\n=== STATION SALES SUMMARY ===\n');
+
+numStations = size(chosenEdges,1);
+
+for s = 1:numStations
+
+    % Events for this station
+    Ts = EVevents(EVevents.stationIdx == s, :);
+
+    if isempty(Ts)
+        fprintf('Station %d (edge %d->%d): No charging sessions\n', ...
+            s, chosenEdges(s,1), chosenEdges(s,2));
+        continue;
+    end
+
+    % ---- Metrics ----
+    totalEnergy_kWh   = sum(Ts.energy_kWh);
+    totalTime_min     = sum(Ts.charge_min);
+    numSessions       = height(Ts);
+
+    avgChargeTime_min = totalTime_min / numSessions;
+    avgEnergyPerEV    = totalEnergy_kWh / numSessions;
+
+    % ---- Print ----
+    fprintf(['Station %d (edge %d->%d): ', ...
+             'ChargeSold = %.2f kWh | ', ...
+             'TotalTime = %.2f min | ', ...
+             'AvgChargeTime = %.2f min | ', ...
+             'AvgEnergy/EV = %.2f kWh | ', ...
+             'Sessions = %d\n'], ...
+        s, chosenEdges(s,1), chosenEdges(s,2), ...
+        totalEnergy_kWh, totalTime_min, ...
+        avgChargeTime_min, avgEnergyPerEV, ...
+        numSessions);
+end
 
 
 
