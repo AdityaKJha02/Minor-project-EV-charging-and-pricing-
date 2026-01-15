@@ -82,9 +82,9 @@ battery_kWh = 59;
 
 numStations = 6;
 
-wCharge = 1.0;
-wStop   = 1.0;
-wVar    = 0.3;
+wCharge = 9.369;
+wStop   = 8.561;
+wVar    = 1.756;
 
 maxGreedyIter = 1000;
 disp(numEVs_hourly.')
@@ -158,7 +158,7 @@ for k = 1:numel(stationStats)
 end
 speed_kmh = 60;
 kmPerUnit = 2;
-portsPerStation = [5 3 2 1 1 3];
+portsPerStation = [4 2 2 1 1 3];
 
 
 %% =========================================================
@@ -187,7 +187,6 @@ speed_kmh      = 60;       % EV speed
 chargerPower_kW = 180;      % DC fast charger power
 
 % ports per station (same order as chosenEdges)
-portsPerStation = [4 2 2 1 1 1];   % example (length = numStations)
 % =========================================================
 % EV ARRIVAL – WAITING – DEPARTURE TIME SIMULATION
 % =========================================================
@@ -202,9 +201,26 @@ portsPerStation = [4 2 2 1 1 1];   % example (length = numStations)
     battery_kWh, chargerPower_kW, portsPerStation);
 
 %% =========================================================
-%% 11. EVFCS POWER TIMELINE
+%% 12. EVFCS POWER TIMELINE
 %% =========================================================
 
 generateEVFCSArrivalAndPowerTimeline_10min( ...
     EVevents, chosenEdges, portsPerStation, battery_kWh);
+
+
+%% =========================================================
+%% 13. Optimising the weights in greedy algorithm
+%% =========================================================
+%{
+best = randomWeightSearch_MaxEnergy( ...
+    50, ...                       % number of random trials
+    candidateEdges, taskPaths, OD, dist, ...
+    consRate, numEVs_hourly, minSOC, maxSOC, ...
+    chargeThreshold, stopSOC, ...
+    6, ...                        % number of EVFCS
+    20, ...                       % max greedy iterations
+    battery_kWh, ...
+    baseLoad24h, edgeToBus, ...
+    kmPerUnit, speed_kmh, portsPerStation);
+%}
 
