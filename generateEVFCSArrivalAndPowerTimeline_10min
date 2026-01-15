@@ -35,7 +35,7 @@ for s = 1:numStations
     if isempty(T), continue; end
 
     nSlots = numel(timeGrid);
-
+SOCRangeLabel = strings(nSlots,1);
     ActivePorts     = strings(nSlots,1);
     ActiveEVs       = strings(nSlots,1);
     StationPower_kW = zeros(nSlots,1);
@@ -54,30 +54,48 @@ for s = 1:numStations
         % -----------------------------------------------
         % Check each charging event
         % -----------------------------------------------
-        for e = 1:height(T)
+        socRangeStr = strings(portsPerStation(s),1);
 
-            t_start = T.start_min(e);
-            t_end   = T.depart_event_min(e);
+for e = 1:height(T)
 
-            if t_now >= t_start && t_now < t_end
+    t_start = T.start_min(e);
+    t_end   = T.depart_event_min(e);
 
-                p = T.port(e);
-                portsUsed(p) = true;
-                evOnPort(p)  = "EV" + T.evID(e);
+    if t_now >= t_start && t_now < t_end
 
-                % SOC-based power at this instant
-                elapsed = t_now - t_start;
-                [tvec, SOCvec, Pvec, ~] = chargingPowerAndEnergy( ...
-                    T.soc_before(e), T.soc_after(e), battery_kWh);
+        p = T.port(e);
+        portsUsed(p) = true;
+        evOnPort(p)  = "EV" + T.evID(e);
 
-                idx = find(tvec <= elapsed, 1, 'last');
-                if isempty(idx)
-                    idx = 1;
-                end
+        % ----- SOC-based power -----
+        elapsed = t_now - t_start;
 
-                portPower(p) = Pvec(idx);
-            end
+        [tvec, SOCvec, Pvec, ~] = chargingPowerAndEnergy( ...
+            T.soc_before(e), T.soc_after(e), battery_kWh);
+
+        idx = find(tvec <= elapsed, 1, 'last');
+        if isempty(idx), idx = 1; end
+
+        soc_now = SOCvec(idx);
+        portPower(p) = Pvec(idx);
+
+        % ----- SOC RANGE LABEL -----
+        if soc_now < 50
+            socBand = "20-50";
+        elseif soc_now < 75
+            socBand = "50-75";
+        elseif soc_now < 85
+            socBand = "75-85";
+        elseif soc_now < 95
+            socBand = "85-95";
+        else
+            socBand = "95-100";
         end
+
+        socRangeStr(p) = socBand + "(EV" + T.evID(e) + ")";
+    end
+end
+
 
         % -----------------------------------------------
         % Record slot summary
@@ -85,12 +103,15 @@ for s = 1:numStations
         usedPorts = find(portsUsed);
 
         if isempty(usedPorts)
-            ActivePorts(k) = "";
-            ActiveEVs(k)   = "";
-        else
-            ActivePorts(k) = strjoin(string(usedPorts'), ",");
-            ActiveEVs(k)   = strjoin(evOnPort(usedPorts)', ",");
-        end
+    ActivePorts(k) = "";
+    ActiveEVs(k)   = "";
+    SOCRangeLabel(k) = "";
+else
+    ActivePorts(k) = strjoin(string(usedPorts'), ",");
+    ActiveEVs(k)   = strjoin(evOnPort(usedPorts)', ",");
+    SOCRangeLabel(k) = strjoin(socRangeStr(usedPorts)', ",");
+end
+
 
         StationPower_kW(k) = sum(portPower);
     end
@@ -102,11 +123,12 @@ for s = 1:numStations
     Minute = mod(timeGrid,60);
 
     Tout = table( ...
-        Hour, Minute, timeGrid, ...
-        ActivePorts, ActiveEVs, StationPower_kW, ...
-        'VariableNames', { ...
-        'Hour','Minute','Time_min', ...
-        'ActivePorts','EVsCharging','StationPower_kW'});
+    Hour, Minute, timeGrid, ...
+    ActivePorts, ActiveEVs, SOCRangeLabel, StationPower_kW, ...
+    'VariableNames', { ...
+    'Hour','Minute','Time_min', ...
+    'ActivePorts','EVsCharging','SOC_Range_Charging','StationPower_kW'});
+
 
     % -----------------------------------------------------
     % Write sheet
