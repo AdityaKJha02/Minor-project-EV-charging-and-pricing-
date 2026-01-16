@@ -17,3 +17,4 @@ function selling_price = computeSellingPrice(rtp_price, markup_factor)
     selling_price = (1 + markup_factor) .* rtp_price;
 
 end
+
