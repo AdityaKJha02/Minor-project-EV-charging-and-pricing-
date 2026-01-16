@@ -10,11 +10,6 @@ function selling_price = computeSellingPrice(rtp_price, markup_factor)
 % Output:
 %   selling_price - array of selling prices for 24 hours (Rs/kWh)
 
-    % Check that RTP signal has 24 elements
-    if numel(rtp_price) ~= 24
-        error('RTP price array must have exactly 24 elements.');
-    end
-
     % Ensure RTP is a column vector (optional, for consistency)
     rtp_price = rtp_price(:);
 
