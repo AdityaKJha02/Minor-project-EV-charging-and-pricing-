@@ -7,7 +7,7 @@ clear;
 excelFile   = 'June_Irradiance.xlsx';
 outputExcel = 'PV_Results_6_NPV.xlsx';
 
-N_PV = [400 390 420 405 397 408];   % PV configurations
+N_PV = [400 200 200 200 200 200];   % PV configurations
 % P_module_max = 125;                % W per module
 
 nCases = length(N_PV);
@@ -93,3 +93,4 @@ for i = 1:nCases
 end
 
 disp('✔ Graphs generated and Excel file with 6 sheets created successfully.');
+
