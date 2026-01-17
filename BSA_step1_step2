@@ -1,0 +1,163 @@
+function BSA = BSA_step1_step2( ...
+        EV_file, PV_file, RTP_file, ...
+        sheetNames_EV, sheetNames_PV)
+
+% =========================================================
+% Battery Scheduling Algorithm
+% Implicit mutual exclusivity via grid constraints
+% 10-minute resolution
+% =========================================================
+
+%% ---------------------------
+% PARAMETERS
+% ---------------------------
+SOC_min = 20;          % %
+SOC_max = 80;          % %
+P_CD = [300, 250, 200, 220, 240, 260];   % kW
+
+beta_ch  = 150;        % kW
+beta_dis = 150;        % kW
+
+eta_BC = 0.95;
+eta_BD = 0.95;
+
+E_BESS = 500;          % kWh
+
+dt     = 1/6;          % hour
+Nslots = 144;
+nFCS   = 6;
+
+%% ---------------------------
+% READ RTP DATA
+% ---------------------------
+rtp_raw = readmatrix(RTP_file);
+
+rho_PUR  = rtp_raw(1:Nslots,2);
+rho_SELL = rtp_raw(1:Nslots,3);
+
+rho_PUR  = rho_PUR(:);
+rho_SELL = rho_SELL(:);
+
+%% ---------------------------
+% PRICE PRIORITY ORDERING
+% ---------------------------
+[~, Omega_BC] = sort(rho_PUR,  'ascend');    % cheap hours
+[~, Omega_BD] = sort(rho_SELL, 'descend');   % high revenue hours
+
+%% ---------------------------
+% READ EV & PV DATA
+% ---------------------------
+P_EV = cell(1,nFCS);
+P_PV_avg = cell(1,nFCS);
+P_PV_max = cell(1,nFCS);
+
+E_EV_day = zeros(1,nFCS);
+
+for i = 1:nFCS
+
+    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
+    P_EV{i} = EV_temp(1:Nslots,7);
+
+    PV_temp = readmatrix(PV_file,'Sheet',sheetNames_PV{i});
+    P_PV_avg{i} = PV_temp(1:Nslots,2);
+    P_PV_max{i} = PV_temp(1:Nslots,3);
+
+    E_EV_day(i) = dt * sum(P_EV{i});
+end
+
+%% ---------------------------
+% BATTERY SCHEDULING
+% (Implicit exclusivity via Net_Load)
+% ---------------------------
+P_BC = cell(1,nFCS);
+P_BD = cell(1,nFCS);
+SOC  = cell(1,nFCS);
+
+for i = 1:nFCS
+
+    P_BC{i} = zeros(Nslots,1);
+    P_BD{i} = zeros(Nslots,1);
+
+    SOC{i} = zeros(Nslots+1,1);
+    SOC{i}(1) = SOC_min;
+
+    for t = 1:Nslots
+
+        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+
+        % =====================================================
+        % CHARGING REGION: Net_Load ≤ P_CD
+        % =====================================================
+        if Net_Load <= P_CD(i) && SOC{i}(t) < SOC_max
+
+            P_margin = P_CD(i) - Net_Load;
+
+            if P_margin > 0
+
+                SOC_now  = SOC{i}(t);
+                SOC_next = min(SOC_now + 1, SOC_max);
+
+                [~,~,P_batt_vec,~] = ...
+                    chargingPowerAndEnergy(SOC_now, SOC_next, E_BESS);
+
+                P_batt_max = max(P_batt_vec);
+
+                P_BC{i}(t) = min([P_margin, beta_ch, P_batt_max]);
+
+                dSOC = (eta_BC * P_BC{i}(t) * dt / E_BESS) * 100;
+                SOC{i}(t+1) = min(SOC{i}(t) + dSOC, SOC_max);
+            else
+                SOC{i}(t+1) = SOC{i}(t);
+            end
+
+        % =====================================================
+        % DISCHARGING REGION: Net_Load > P_CD
+        % =====================================================
+        elseif Net_Load > P_CD(i) && SOC{i}(t) > SOC_min
+
+            overload = Net_Load - P_CD(i);
+
+            [~,~,~,~,P_dis_SOC] = ...
+                dischargingPowerAndEnergy(SOC{i}(t), SOC_min, E_BESS);
+
+            P_BD{i}(t) = min([overload, beta_dis, P_dis_SOC]);
+
+            dSOC = (P_BD{i}(t) * dt) / (eta_BD * E_BESS) * 100;
+            SOC{i}(t+1) = max(SOC{i}(t) - dSOC, SOC_min);
+
+        % =====================================================
+        % IDLE REGION
+        % =====================================================
+        else
+            SOC{i}(t+1) = SOC{i}(t);
+        end
+
+    end
+end
+
+%% ---------------------------
+% OUTPUT STRUCTURE
+% ---------------------------
+BSA.P_EV        = P_EV;
+BSA.P_PV_avg    = P_PV_avg;
+BSA.P_PV_max    = P_PV_max;
+
+BSA.P_BC        = P_BC;
+BSA.P_BD        = P_BD;
+BSA.SOC         = SOC;
+
+BSA.P_CD        = P_CD;
+BSA.SOC_min     = SOC_min;
+BSA.SOC_max     = SOC_max;
+
+BSA.rho_PUR     = rho_PUR;
+BSA.rho_SELL    = rho_SELL;
+
+BSA.Omega_BC    = Omega_BC;
+BSA.Omega_BD    = Omega_BD;
+
+BSA.E_EV_day    = E_EV_day;
+
+end
+
+
