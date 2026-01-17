@@ -82,9 +82,9 @@ battery_kWh = 59;
 
 numStations = 6;
 
-wCharge = 9.369;
-wStop   = 8.561;
-wVar    = 1.756;
+wCharge = 8.431;
+wStop   = 8.709;
+wVar    = 1.092;
 
 maxGreedyIter = 1000;
 disp(numEVs_hourly.')
@@ -223,4 +223,156 @@ best = randomWeightSearch_MaxEnergy( ...
     baseLoad24h, edgeToBus, ...
     kmPerUnit, speed_kmh, portsPerStation);
 %}
+
+%% =========================================================
+%% 14. Battery Scheduling Algorithm
+%% =========================================================
+
+%% ---------------------------
+% BATTERY PARAMETERS
+% ---------------------------
+E_BESS  = 500;    % kWh
+beta_ch = 150;    % kW
+eta_BC  = 0.95;   % efficiency
+
+EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+PV_file  = 'PV_Results_6_NPV_10min.xlsx';
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+
+sheetNames_EV = { ...
+    'EVFCS_1_6_8', ...
+    'EVFCS_2_12_13', ...
+    'EVFCS_3_21_20', ...
+    'EVFCS_4_6_5', ...
+    'EVFCS_5_6_2', ...
+    'EVFCS_6_11_12' };
+
+sheetNames_PV = { ...
+    'NPV_400', ...
+    'NPV_390', ...
+    'NPV_420', ...
+    'NPV_405', ...
+    'NPV_397', ...
+    'NPV_408' };
+
+%% ------------------------
+% RUN BSA
+% ------------------------
+BSA = BSA_step1_step2( ...
+        EV_file, PV_file, RTP_file, ...
+        sheetNames_EV, sheetNames_PV);
+
+dt = 1/6;
+nFCS = numel(BSA.P_EV);
+Nslots = numel(BSA.P_EV{1});
+
+fprintf('BSA executed successfully.\n');
+
+%% ========================================================
+% 1️⃣ VERIFY MUTUAL EXCLUSIVITY (CRITICAL)
+% ========================================================
+
+fprintf('\nChecking mutual exclusivity...\n');
+
+for i = 1:nFCS
+    simultaneous = find( ...
+        (BSA.P_BC{i} > 0) & (BSA.P_BD{i} > 0) );
+
+    if isempty(simultaneous)
+        fprintf('FCS %d: OK (no simultaneous charge/discharge)\n', i);
+    else
+        error('FCS %d violates exclusivity at slots: %s', ...
+              i, mat2str(simultaneous));
+    end
+end
+
+%% ========================================================
+% 2️⃣ VERIFY GRID-BASED OPERATING REGIONS
+% ========================================================
+
+fprintf('\nChecking grid operating regions...\n');
+
+for i = 1:nFCS
+
+    Net_Load = BSA.P_EV{i} - BSA.P_PV_avg{i};
+
+    % Charging should happen only when Net_Load <= P_CD
+    badCharge = find( ...
+        (BSA.P_BC{i} > 0) & (Net_Load > BSA.P_CD(i)) );
+
+    % Discharging should happen only when Net_Load > P_CD
+    badDischarge = find( ...
+        (BSA.P_BD{i} > 0) & (Net_Load <= BSA.P_CD(i)) );
+
+    if isempty(badCharge) && isempty(badDischarge)
+        fprintf('FCS %d: Grid conditions respected\n', i);
+    else
+        error('FCS %d violates grid condition logic', i);
+    end
+end
+
+%% ========================================================
+% 3️⃣ VERIFY SOC BOUNDS
+% ========================================================
+
+fprintf('\nChecking SOC bounds...\n');
+
+for i = 1:nFCS
+    if all(BSA.SOC{i} >= BSA.SOC_min & BSA.SOC{i} <= BSA.SOC_max)
+        fprintf('FCS %d: SOC bounds respected\n', i);
+    else
+        error('FCS %d SOC out of bounds', i);
+    end
+end
+
+%% ========================================================
+% 4️⃣ VISUAL VERIFICATION (PLOTS)
+% ========================================================
+
+i = 1;  % choose one station to visualize
+t = (0:Nslots-1) * dt;
+
+figure('Name','BSA Verification','Color','w');
+
+subplot(3,1,1)
+plot(t, BSA.P_EV{i}, 'k', 'LineWidth',1.2); hold on;
+plot(t, BSA.P_PV_avg{i}, 'g', 'LineWidth',1.2);
+yline(BSA.P_CD(i),'r--','LineWidth',1.2);
+ylabel('Power (kW)')
+title('EV Load, PV Generation, Contract Demand')
+legend('EV','PV','P_{CD}')
+
+subplot(3,1,2)
+stairs(t, BSA.P_BC{i}, 'b', 'LineWidth',1.2); hold on;
+stairs(t, BSA.P_BD{i}, 'r', 'LineWidth',1.2);
+ylabel('Battery Power (kW)')
+legend('Charging','Discharging')
+title('Battery Charging / Discharging (Mutually Exclusive)')
+
+
+subplot(3,1,3)
+plot(t, BSA.SOC{i}(1:end-1), 'm', 'LineWidth',1.2);
+ylim([BSA.SOC_min-5 BSA.SOC_max+5])
+ylabel('SOC (%)')
+title('State of Charge')
+
+
+
+fprintf('\nVerification completed successfully.\n');
+
+
+% ---------------------------------------------------------
+
+% ---------------------------------------------------------
+% STEP-5: Generate Excel
+% ---------------------------------------------------------
+% -----------------------------------------
+% STEP 5: Power, energy & Excel
+% -----------------------------------------
+outputExcel = 'BSA_Results_10min.xlsx';
+
+BSA = BSA_step5_generateExcel(BSA, outputExcel);
+
+fprintf('✔ STEP-5 completed successfully\n');
+
 
