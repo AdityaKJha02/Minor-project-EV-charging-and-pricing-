@@ -1,0 +1,307 @@
+function BSA = BSA_step1_step2( ...
+        EV_file, PV_file, RTP_file, ...
+        sheetNames_EV, sheetNames_PV)
+
+% =========================================================
+% Battery Scheduling Algorithm
+% STEP-1 & STEP-2 (10-minute resolution)
+% =========================================================
+% Handles:
+%  - Row-wise 10-minute data
+%  - Files with more than 24 hours
+%  - Uses only first 144 slots
+% =========================================================
+
+%% ---------------------------
+% PARAMETERS
+% ---------------------------
+SOC_min = 0.20;
+SOC_max = 0.80;
+
+P_CD = [300, 250, 200, 220, 240, 260];   % assumed (kW)
+beta_ch = 150;    % Max charging power (kW) – assumed
+dt     = 1/6;    % 10-minute → hour
+Nslots = 144;    % first 24 hours only
+nFCS   = 6;
+eta_BC  = 0.95;
+E_BESS  = 500;
+beta_dis = 150;   % Max discharging power (kW)
+eta_BD   = 0.95;  % Discharging efficiency
+
+%% ---------------------------
+% READ RTP DATA (STEP-1)
+% ---------------------------
+% Column B → purchase price
+% Column C → selling price
+rtp_raw = readmatrix(RTP_file);
+
+rho_PUR  = rtp_raw(1:Nslots, 2);   % purchase price
+rho_SELL = rtp_raw(1:Nslots, 3);   % selling price
+
+rho_PUR  = rho_PUR(:);
+rho_SELL = rho_SELL(:);
+
+%% ---------------------------
+% STEP-2: RTP PRIORITY SORTING
+% ---------------------------
+% Charging priority → lowest purchase price
+% Discharging priority → highest selling price
+[~, Omega_BC] = sort(rho_PUR,  'ascend');
+[~, Omega_BD] = sort(rho_SELL, 'descend');
+
+%% ---------------------------
+% READ EV & PV DATA (STEP-1)
+% ---------------------------
+P_EV = cell(1,nFCS);
+P_PV_avg = cell(1,nFCS);
+P_PV_max = cell(1,nFCS);
+
+E_EV_day = zeros(1,nFCS);
+
+for i = 1:nFCS
+
+    % ---- EV demand power (Column G) ----
+    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
+    EV_temp = EV_temp(:,7);              % column G
+    P_EV{i} = EV_temp(1:Nslots);
+
+    % ---- PV generation power ----
+    PV_temp = readmatrix(PV_file, 'Sheet', sheetNames_PV{i});
+
+    P_PV_avg{i} = PV_temp(1:Nslots,2);   % column B
+    P_PV_max{i} = PV_temp(1:Nslots,3);   % column C
+
+    % ---- Daily EV energy (kWh) ----
+    E_EV_day(i) = dt * sum(P_EV{i});
+
+end
+
+%% ---------------------------
+% OUTPUT STRUCTURE
+% ---------------------------
+BSA.P_EV = P_EV;                   % EV demand (kW)
+
+BSA.P_PV_avg = P_PV_avg;           % PV avg power (kW)
+BSA.P_PV_max = P_PV_max;           % PV max power (kW)
+
+BSA.rho_PUR  = rho_PUR;            % RTP purchase
+BSA.rho_SELL = rho_SELL;           % RTP selling
+
+BSA.P_CD     = P_CD;               % Contract demand
+BSA.SOC_min  = SOC_min;
+BSA.SOC_max  = SOC_max;
+
+BSA.Omega_BC = Omega_BC;           % charging priority indices
+BSA.Omega_BD = Omega_BD;           % discharging priority indices
+
+BSA.E_EV_day = E_EV_day;           % daily EV energy (kWh)
+
+
+
+
+
+%% ---------------------------
+% STEP-3: BATTERY CHARGING
+% ---------------------------
+%% ---------------------------
+% STEP-3: BATTERY CHARGING (CORRECTED)
+% ---------------------------
+P_BC = cell(1,nFCS);     % Battery charging power (kW)
+SOC  = cell(1,nFCS);     % State of Charge trajectory
+
+for i = 1:nFCS
+
+    P_BC{i} = zeros(Nslots,1);
+    SOC{i}  = zeros(Nslots+1,1);
+    SOC{i}(1) = SOC_min * 100;   % SOC in %
+
+    charge_allowed = false(Nslots,1);
+    charge_allowed(Omega_BC) = true;
+
+    for t = 1:Nslots
+
+        % Net EV load
+        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+
+        % Available grid margin
+        P_margin = P_CD(i) - Net_Load;
+
+        if charge_allowed(t) && P_margin > 0 && SOC{i}(t) < SOC_max*100
+
+            % --------------------------------------------------
+            % Battery-physics charging power (SOC dependent)
+            % --------------------------------------------------
+            SOC_now = SOC{i}(t);
+            SOC_next_guess = min(SOC_now + 1, 100);   % small SOC step
+
+            [~, ~, P_batt_vec, ~] = ...
+                chargingPowerAndEnergy(SOC_now, SOC_next_guess, E_BESS);
+
+            P_batt_max = max(P_batt_vec);   % kW allowed by battery
+
+            % --------------------------------------------------
+            % Final charging power (ALL constraints)
+            % --------------------------------------------------
+            P_BC{i}(t) = min([ ...
+                P_margin, ...
+                beta_ch, ...
+                P_batt_max ]);
+
+            % --------------------------------------------------
+            % SOC update using energy balance
+            % --------------------------------------------------
+            dSOC = (eta_BC * P_BC{i}(t) * dt / E_BESS) * 100;
+            SOC{i}(t+1) = SOC{i}(t) + dSOC;
+
+            SOC{i}(t+1) = min(SOC{i}(t+1), SOC_max*100);
+
+        else
+            P_BC{i}(t)  = 0;
+            SOC{i}(t+1) = SOC{i}(t);
+        end
+
+    end
+end
+
+
+
+
+
+%% ---------------------------
+% OUTPUT STRUCTURE
+% ---------------------------
+
+BSA.P_BC  = P_BC;
+BSA.SOC   = SOC;
+BSA.P_EV = P_EV;                   % EV demand (kW)
+
+BSA.P_PV_avg = P_PV_avg;           % PV avg power (kW)
+BSA.P_PV_max = P_PV_max;           % PV max power (kW)
+
+BSA.rho_PUR  = rho_PUR;            % RTP purchase
+BSA.rho_SELL = rho_SELL;           % RTP selling
+
+BSA.P_CD     = P_CD;               % Contract demand
+BSA.SOC_min  = SOC_min;
+BSA.SOC_max  = SOC_max;
+
+BSA.Omega_BC = Omega_BC;           % charging priority indices
+BSA.Omega_BD = Omega_BD;           % discharging priority indices
+
+BSA.E_EV_day = E_EV_day;           % daily EV energy (kWh)
+
+
+
+
+
+%% ---------------------------
+% STEP-4: BATTERY DISCHARGING
+% ---------------------------
+% Uses:
+%  - Discharging priority indices (Ω_BD)
+%  - SOC result from Step-3
+%  - Contract demand constraint
+% ---------------------------
+
+P_BD = cell(1,nFCS);   % Battery discharging power (kW)
+
+for i = 1:nFCS
+
+    % Initialize
+    P_BD{i} = zeros(Nslots,1);
+
+    % ---------------------------------
+    % Discharging permission mask
+    % Ω_BD: highest selling price slots
+    % ---------------------------------
+    discharge_allowed = false(Nslots,1);
+    discharge_allowed(Omega_BD) = true;
+
+    % ---------------------------------
+    % Time-sequential discharging
+    % ---------------------------------
+    for t = 1:Nslots
+
+        % Net EV load
+        % (P_D,EV^t − P_PV^t)
+        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+
+        % Grid overload beyond contract demand
+        overload_power = Net_Load - P_CD(i);
+
+        if discharge_allowed(t) && overload_power > 0 && SOC{i}(t) > SOC_min*100
+
+            % ---------------------------------
+            % Battery discharging power
+            % P_BD^t = min(overload, β_dis)
+            % ---------------------------------
+            % ---------------------------------
+% NEW: Battery discharging power
+% obtained from SOC-dependent curve
+% ---------------------------------
+[~, ~, ~, ~, P_dis_SOC] = ...
+    dischargingPowerAndEnergy( ...
+        SOC{i}(t), ...        % current SOC (%)
+        SOC_min*100, ...          % minimum SOC limit (%)
+        E_BESS, ...
+        SOC{i}(t)*100 );          % query power at current SOC
+
+% ---------------------------------
+% Apply physical limits
+% ---------------------------------
+P_BD{i}(t) = min([ ...
+    P_dis_SOC, ...        % SOC-based discharging power
+    overload_power, ...   % grid overload
+    beta_dis]);           % battery power limit
+
+% ---------------------------------
+% SOC update using ENERGY balance
+% (discharging energy is POSITIVE)
+% ---------------------------------
+E_dis = P_BD{i}(t) * dt/ eta_BD;      % kWh discharged in this slot
+
+SOC{i}(t+1) = SOC{i}(t) - (E_dis / (eta_BD * E_BESS))*100;
+
+% Enforce SOC lower bound
+SOC{i}(t+1) = max(SOC{i}(t+1), SOC_min*100);
+
+
+
+
+        else
+            P_BD{i}(t)  = 0;
+            SOC{i}(t+1) = SOC{i}(t);
+        end
+
+    end
+end
+
+
+
+BSA.P_BD = P_BD;   % Battery discharging power (kW)
+BSA.SOC  = SOC;    % Final SOC trajectory
+
+
+
+
+    BSA.P_EV        = P_EV;
+BSA.P_PV_avg    = P_PV_avg;
+BSA.P_PV_max    = P_PV_max;
+BSA.P_BC        = P_BC;
+BSA.P_BD        = P_BD;
+
+BSA.SOC         = SOC;
+BSA.P_CD        = P_CD;
+BSA.SOC_min     = SOC_min;
+BSA.SOC_max     = SOC_max;
+
+BSA.rho_PUR     = rho_PUR;
+BSA.rho_SELL    = rho_SELL;
+
+
+BSA.Omega_BC    = Omega_BC;
+BSA.Omega_BD    = Omega_BD;
+BSA.E_EV_day    = E_EV_day;
+
+
+end
