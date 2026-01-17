@@ -376,3 +376,58 @@ BSA = BSA_step5_generateExcel(BSA, outputExcel);
 fprintf('✔ STEP-5 completed successfully\n');
 
 
+
+%% =========================================================
+%% 15. FPM ALGORITHM
+%% =========================================================
+
+%% =========================================================
+% MAIN SCRIPT: FPM using BSA Excel output ONLY
+% =========================================================
+
+%% ---------------------------
+% FILES
+% ---------------------------
+BSA_excel = 'BSA_Results_10min.xlsx';
+RTP_file  = 'RTP_grid_cost_10min.xlsx';
+
+%% ---------------------------
+% FPM PARAMETERS
+% ---------------------------
+params.dt = 1/6;              % 10-minute resolution
+
+params.PM_DES       = 0.25;   % Desired profit margin
+params.rho_SELL_0   = 5.0;    % Initial EV selling price
+params.rho_SELL_max = 20.0;   % Maximum EV selling price
+params.delta_rho    = 0.1;    % Step size
+
+% RTP purchase price (column B)
+rtp_raw = readmatrix(RTP_file);
+params.rho_PUR = rtp_raw(1:144, 2);
+
+% Fixed operating cost per FCS
+params.fixedCost = [200 200 200 200 200 200];
+
+%% ---------------------------
+% RUN FPM
+% ---------------------------
+FPM = run_FPM_from_BSA_Excel(params, BSA_excel);
+
+%% ---------------------------
+% DISPLAY RESULTS
+% ---------------------------
+fprintf('\n========== FPM RESULTS ==========\n');
+fprintf('Optimal EV selling price  : %.2f\n', FPM.rho_SELL);
+fprintf('Achieved profit margin    : %.3f\n', FPM.PM);
+fprintf('Total revenue             : %.2f\n', FPM.Total_Revenue);
+fprintf('Total cost                : %.2f\n', FPM.Total_Cost);
+
+if FPM.PM >= params.PM_DES
+    disp('✔ Desired profit margin achieved');
+else
+    disp('✘ Desired profit margin NOT achieved');
+end
+
+export_FPM_results_to_excel(FPM, 'BSA_Results_10min.xlsx', 'FPM_Final_Results.xlsx');
+
+
