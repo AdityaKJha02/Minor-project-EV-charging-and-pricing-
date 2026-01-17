@@ -1,0 +1,84 @@
+function FPM = run_FPM_from_BSA_Excel(params, BSA_excel)
+
+PM_DES     = params.PM_DES;
+rhoSELL0   = params.rho_SELL_0;
+rhoSELLmax = params.rho_SELL_max;
+drho       = params.delta_rho;
+
+rho_PUR    = params.rho_PUR(:);
+fixedCost  = params.fixedCost;
+dt         = params.dt;
+
+%% Detect FCS sheets
+[~, sheetNames] = xlsfinfo(BSA_excel);
+nFCS = numel(sheetNames);
+
+E_EV        = zeros(1,nFCS);
+E_GRID_slot = cell(1,nFCS);
+
+%% Read Excel safely
+for i = 1:nFCS
+
+    M = readmatrix(BSA_excel,'Sheet',sheetNames{i});
+
+    % Column 3: P_EV_kW
+    P_EV = M(:,3);
+    P_EV = P_EV(~isnan(P_EV));        % REMOVE NaN
+    E_EV(i) = sum(P_EV) * dt;
+
+    % Column 10: E_Grid_kWh
+    E_grid = M(:,10);
+    E_grid = E_grid(~isnan(E_grid));  % REMOVE NaN
+    E_GRID_slot{i} = E_grid;
+end
+
+%% Selling price iteration
+rhoSELL = rhoSELL0;
+bestFound = false;
+
+while rhoSELL <= rhoSELLmax
+
+    Total_Revenue = 0;
+    Total_Cost    = 0;
+
+    for i = 1:nFCS
+
+        % Revenue
+        R_i = rhoSELL * E_EV(i);
+
+        % Cost
+        Ng = min(length(rho_PUR), length(E_GRID_slot{i}));
+        C_i = sum(rho_PUR(1:Ng) .* E_GRID_slot{i}(1:Ng)) ...
+              + fixedCost(i);
+
+        Total_Revenue = Total_Revenue + R_i;
+        Total_Cost    = Total_Cost    + C_i;
+    end
+
+    % ⚠️ Guard against zero revenue
+    if Total_Revenue <= 0
+        PM = NaN;
+    else
+        PM = (Total_Revenue - Total_Cost) / Total_Revenue;
+    end
+
+    if ~isnan(PM) && PM >= PM_DES
+        bestFound = true;
+        break;
+    end
+
+    rhoSELL = rhoSELL + drho;
+end
+
+%% Output
+FPM.rho_SELL      = rhoSELL;
+FPM.PM            = PM;
+FPM.Total_Revenue = Total_Revenue;
+FPM.Total_Cost    = Total_Cost;
+FPM.E_EV          = E_EV;
+
+if ~bestFound
+    warning('Desired profit margin not reached');
+end
+
+end
