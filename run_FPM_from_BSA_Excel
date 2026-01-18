@@ -1,39 +1,58 @@
 function FPM = run_FPM_from_BSA_Excel(params, BSA_excel)
+% ==========================================================
+% FLAT PRICING MECHANISM (FPM)
+% Uses ONLY outputs of Cd_fixcost_FPM and Cd_OandM_FPM
+% Implements Eqs. (23), (25), (33), (34) from the paper
+% ==========================================================
 
+%% ---------------------------
+% Unpack parameters
+% ---------------------------
 PM_DES     = params.PM_DES;
 rhoSELL0   = params.rho_SELL_0;
 rhoSELLmax = params.rho_SELL_max;
 drho       = params.delta_rho;
 
-rho_PUR    = params.rho_PUR(:);
-fixedCost  = params.fixedCost;
+rho_PUR    = params.rho_PUR(:);     % [h×1]
 dt         = params.dt;
 
-%% Detect FCS sheets
+C_FIX      = params.C_FIX;          % from Cd_fixcost_FPM
+C_OandM    = params.C_OandM;        % from Cd_OandM_FPM
+
+% Eq. (34): fixed + O&M
+C_FIXED_TOTAL = C_FIX + C_OandM;
+
+%% ---------------------------
+% Detect FCS sheets
+% ---------------------------
 [~, sheetNames] = xlsfinfo(BSA_excel);
 nFCS = numel(sheetNames);
 
-E_EV        = zeros(1,nFCS);
-E_GRID_slot = cell(1,nFCS);
+E_EV        = zeros(1,nFCS);        % ∑ E_D,EV
+E_GRID_slot = cell(1,nFCS);         % E_GRID^h
 
-%% Read Excel safely
+%% ---------------------------
+% Read BSA Excel outputs
+% ---------------------------
 for i = 1:nFCS
 
     M = readmatrix(BSA_excel,'Sheet',sheetNames{i});
 
-    % Column 3: P_EV_kW
+    % Column 3: EV charging power (kW)
     P_EV = M(:,3);
-    P_EV = P_EV(~isnan(P_EV));        % REMOVE NaN
-    E_EV(i) = sum(P_EV) * dt;
+    P_EV = P_EV(~isnan(P_EV));
+    E_EV(i) = sum(P_EV) * dt;        % ∑ E_D,EV
 
-    % Column 10: E_Grid_kWh
+    % Column 10: Net grid energy (kWh)
     E_grid = M(:,10);
-    E_grid = E_grid(~isnan(E_grid));  % REMOVE NaN
+    E_grid = E_grid(~isnan(E_grid));
     E_GRID_slot{i} = E_grid;
 end
 
-%% Selling price iteration
-rhoSELL = rhoSELL0;
+%% ---------------------------
+% Flat price iteration (Eq. 23)
+% ---------------------------
+rhoSELL   = rhoSELL0;
 bestFound = false;
 
 while rhoSELL <= rhoSELLmax
@@ -43,23 +62,34 @@ while rhoSELL <= rhoSELLmax
 
     for i = 1:nFCS
 
-        % Revenue
+        % ----------------------
+        % Revenue – Eq. (33)
+        % ----------------------
         R_i = rhoSELL * E_EV(i);
 
-        % Cost
+        % ----------------------
+        % Energy cost – Eq. (34)
+        % ----------------------
         Ng = min(length(rho_PUR), length(E_GRID_slot{i}));
-        C_i = sum(rho_PUR(1:Ng) .* E_GRID_slot{i}(1:Ng)) ...
-              + fixedCost(i);
+        EnergyCost_i = sum( ...
+            rho_PUR(1:Ng) .* E_GRID_slot{i}(1:Ng) );
+
+        % ----------------------
+        % Total cost – Eq. (34)
+        % ----------------------
+        C_i = C_FIXED_TOTAL(i) + EnergyCost_i;
 
         Total_Revenue = Total_Revenue + R_i;
         Total_Cost    = Total_Cost    + C_i;
     end
 
-    % ⚠️ Guard against zero revenue
-    if Total_Revenue <= 0
-        PM = NaN;
-    else
+    % --------------------------
+    % Profit margin – Eq. (25)
+    % --------------------------
+    if Total_Revenue > 0
         PM = (Total_Revenue - Total_Cost) / Total_Revenue;
+    else
+        PM = NaN;
     end
 
     if ~isnan(PM) && PM >= PM_DES
@@ -70,7 +100,9 @@ while rhoSELL <= rhoSELLmax
     rhoSELL = rhoSELL + drho;
 end
 
-%% Output
+%% ---------------------------
+% Outputs
+% ---------------------------
 FPM.rho_SELL      = rhoSELL;
 FPM.PM            = PM;
 FPM.Total_Revenue = Total_Revenue;
@@ -78,7 +110,7 @@ FPM.Total_Cost    = Total_Cost;
 FPM.E_EV          = E_EV;
 
 if ~bestFound
-    warning('Desired profit margin not reached');
+    warning('FPM: Desired profit margin not reached');
 end
 
 end
