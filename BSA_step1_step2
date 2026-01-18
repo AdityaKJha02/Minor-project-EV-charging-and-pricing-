@@ -1,6 +1,8 @@
 function BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
-        sheetNames_EV, sheetNames_PV)
+        sheetNames_EV, sheetNames_PV, ...
+        E_BESS)
+
 
 % =========================================================
 % Battery Scheduling Algorithm
@@ -12,16 +14,30 @@ function BSA = BSA_step1_step2( ...
 % PARAMETERS
 % ---------------------------
 SOC_min = 20;          % %
-SOC_max = 80;          % %
-P_CD = [300, 250, 200, 220, 240, 260];   % kW
+SOC_max = 90;% %
+nFCS = 6;
+P_CD = zeros(1, nFCS);
+P_EV = cell(1, nFCS);
+
+for i = 1:nFCS
+    % Read EV power from Column G of each sheet
+    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
+    
+    % First 24 hours (144 slots), Column G
+    P_EV{i} = EV_temp(1:144, 7);
+
+    % Contracted demand = peak EV demand
+    P_CD(i) = max(P_EV{i});
+end
+
 
 beta_ch  = 150;        % kW
 beta_dis = 150;        % kW
 
-eta_BC = 0.95;
-eta_BD = 0.95;
+eta_BC = 0.92;
+eta_BD = 0.90;
 
-E_BESS = 500;          % kWh
+         % kWh
 
 dt     = 1/6;          % hour
 Nslots = 144;
@@ -157,6 +173,19 @@ BSA.Omega_BC    = Omega_BC;
 BSA.Omega_BD    = Omega_BD;
 
 BSA.E_EV_day    = E_EV_day;
+% Final grid power and energy (needed for FPM without Excel)
+BSA.P_FCS = cell(1,nFCS);
+BSA.E_GRID = cell(1,nFCS);
+
+for i = 1:nFCS
+    BSA.P_FCS{i} = ...
+        BSA.P_EV{i} ...
+      - BSA.P_PV_avg{i} ...
+      + BSA.P_BC{i} ...
+      - BSA.P_BD{i};
+
+    BSA.E_GRID{i} = BSA.P_FCS{i} * dt;   % kWh per slot
+end
 
 end
 
