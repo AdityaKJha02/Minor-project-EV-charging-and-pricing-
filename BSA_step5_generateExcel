@@ -1,0 +1,93 @@
+function BSA = BSA_step5_generateExcel(BSA, outputExcel)
+% =========================================================
+% STEP-5: FINAL FCS POWER, ENERGY, SORTED PROFILE & EXCEL
+% 10-minute resolution (144 slots)
+% =========================================================
+
+dt = 1/6;                     % 10 min in hours
+nFCS = numel(BSA.P_EV);
+Nslots = numel(BSA.P_EV{1});
+
+time_min = (0:10:1430)';
+time_hr  = time_min / 60;
+
+% -----------------------------------------
+% Allocate
+% -----------------------------------------
+BSA.P_FCS        = cell(1,nFCS);
+BSA.E_FCS        = cell(1,nFCS);
+BSA.E_FCS_day    = zeros(1,nFCS);
+BSA.P_FCS_sorted = cell(1,nFCS);
+
+% -----------------------------------------
+% Compute Step-5 quantities
+% -----------------------------------------
+for i = 1:nFCS
+
+    % Eq. (44): Final grid demand
+    BSA.P_FCS{i} = ...
+        BSA.P_EV{i} ...
+      - BSA.P_PV_avg{i} ...
+      + BSA.P_BC{i} ...
+      - BSA.P_BD{i};
+
+    % Energy per slot
+    BSA.E_FCS{i} = BSA.P_FCS{i} * dt;
+
+    % Daily energy
+    BSA.E_FCS_day(i) = sum(BSA.E_FCS{i});
+
+    % Sorted demand (descending)
+    BSA.P_FCS_sorted{i} = sort(BSA.P_FCS{i}, 'descend');
+end
+
+% -----------------------------------------
+% Write Excel
+% -----------------------------------------
+if exist(outputExcel,'file')
+    delete(outputExcel);
+end
+
+for i = 1:nFCS
+
+    SOC_i = BSA.SOC{i}(1:end-1);
+
+    T = table( ...
+        time_min, ...
+        time_hr, ...
+        BSA.P_EV{i}, ...
+        BSA.P_PV_avg{i}, ...
+        BSA.P_PV_max{i}, ...
+        BSA.P_BC{i}, ...
+        BSA.P_BD{i}, ...
+        SOC_i, ...
+        BSA.P_FCS{i}, ...
+        BSA.E_FCS{i}, ...
+        'VariableNames', { ...
+        'Time_min','Time_hr', ...
+        'P_EV_kW','P_PV_avg_kW','P_PV_max_kW', ...
+        'P_BC_kW','P_BD_kW','SOC_pct', ...
+        'P_Grid_kW','E_Grid_kWh'} );
+
+    sheetName = sprintf('FCS_%d', i);
+    writetable(T, outputExcel, 'Sheet', sheetName);
+
+    % ---- Summary ----
+    summary = {
+        'EV_Energy_kWh',     dt*sum(BSA.P_EV{i});
+        'PV_Energy_kWh',     dt*sum(BSA.P_PV_avg{i});
+        'Battery_Charge_kWh',dt*sum(BSA.P_BC{i});
+        'Battery_Discharge_kWh',dt*sum(BSA.P_BD{i});
+        'Net_Grid_Energy_kWh',BSA.E_FCS_day(i)
+    };
+
+    writecell(summary, outputExcel, ...
+        'Sheet', sheetName, 'Range', 'L2');
+
+    % ---- Sorted profile ----
+    writematrix(BSA.P_FCS_sorted{i}, outputExcel, ...
+        'Sheet', sheetName, 'Range', 'N1');
+end
+
+disp('✔ STEP-5 Excel file generated successfully');
+end
