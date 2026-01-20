@@ -7,10 +7,20 @@ clear;
 excelFile   = 'June_Irradiance.xlsx';
 outputExcel = 'PV_Results_6_NPV.xlsx';
 
-N_PV = [400 200 200 200 200 200];   % PV configurations
-% P_module_max = 125;                % W per module
+N_co = [5, 2, 1, 1, 1, 2];
+PV_module_max=550;
+PV_module_area=2.6;
+A_fc = zeros(1, length(N_co));
+for i = 1:length(N_co)
+    A_fc(i) = Area_calc(N_co(i));
+end
 
-nCases = length(N_PV);
+N_pv=zeros(1,length(N_co));
+for i = 1:length(N_co)
+    N_pv(i) = round(0.85*A_fc(i)/PV_module_area);
+end
+disp(N_pv)
+nCases = length(N_pv);
 
 % =====================================================
 % PRE-ALLOCATE STORAGE
@@ -26,7 +36,7 @@ E_max_all = zeros(1, nCases);
 for i = 1:nCases
 
     [P_avg, P_max, E_avg, E_max, hours, G_avg, G_max] = ...
-        PV_Power_Model_Avg_Max(excelFile, N_PV(i));
+        PV_Power_Model_Avg_Max(excelFile, N_pv(i));
 
     P_avg_all{i} = P_avg;
     P_max_all{i} = P_max;
@@ -59,7 +69,7 @@ for i = 1:nCases
 
     xlabel('Hour')
     ylabel('PV Power (kW)')
-    title(['NPV = ', num2str(N_PV(i))])
+    title(['NPV = ', num2str(N_pv(i))])
     legend('Average Irradiance','Maximum Irradiance','Location','best')
     grid on
 end
@@ -76,7 +86,7 @@ for i = 1:nCases
         P_max_all{i}(:)/1000, ...
         'VariableNames', {'Hour','PV_Power_Avg_kW','PV_Power_Max_kW'});
 
-    sheetName = ['NPV_', num2str(N_PV(i))];
+    sheetName = ['NPV_', num2str(N_pv(i))];
 
     % ---- Write hourly data ----
     writetable(T, outputExcel, 'Sheet', sheetName, 'Range', 'A1');
@@ -93,4 +103,3 @@ for i = 1:nCases
 end
 
 disp('✔ Graphs generated and Excel file with 6 sheets created successfully.');
-
