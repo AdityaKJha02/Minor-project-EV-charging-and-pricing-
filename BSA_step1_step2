@@ -31,8 +31,7 @@ for i = 1:nFCS
 end
 
 
-beta_ch  = 150;        % kW
-beta_dis = 150;        % kW
+
 
 eta_BC = 0.92;
 eta_BD = 0.90;
@@ -49,16 +48,13 @@ nFCS   = 6;
 rtp_raw = readmatrix(RTP_file);
 
 rho_PUR  = rtp_raw(1:Nslots,2);
-rho_SELL = rtp_raw(1:Nslots,3);
 
 rho_PUR  = rho_PUR(:);
-rho_SELL = rho_SELL(:);
 
 %% ---------------------------
 % PRICE PRIORITY ORDERING
 % ---------------------------
 [~, Omega_BC] = sort(rho_PUR,  'ascend');    % cheap hours
-[~, Omega_BD] = sort(rho_SELL, 'descend');   % high revenue hours
 
 %% ---------------------------
 % READ EV & PV DATA
@@ -82,17 +78,17 @@ for i = 1:nFCS
 end
 
 %% ---------------------------
-% BATTERY SCHEDULING
-% (Implicit exclusivity via Net_Load)
+% BATTERY SCHEDULING (SOC-DEPENDENT POWER ONLY)
 % ---------------------------
+
 P_BC = cell(1,nFCS);
 P_BD = cell(1,nFCS);
 SOC  = cell(1,nFCS);
 
 for i = 1:nFCS
 
-    P_BC{i} = zeros(Nslots,1);
-    P_BD{i} = zeros(Nslots,1);
+    P_BC{i} = zeros(Nslots,1);   % charging power (kW)
+    P_BD{i} = zeros(Nslots,1);   % discharging power (kW)
 
     SOC{i} = zeros(Nslots+1,1);
     SOC{i}(1) = SOC_min;
@@ -100,56 +96,60 @@ for i = 1:nFCS
     for t = 1:Nslots
 
         Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+        SOC_now  = SOC{i}(t);
 
         % =====================================================
-        % CHARGING REGION: Net_Load ≤ P_CD
+        % CHARGING MODE (available grid margin)
         % =====================================================
-        if Net_Load <= P_CD(i) && SOC{i}(t) < SOC_max
+        if Net_Load <= P_CD(i) && SOC_now < SOC_max
 
-            P_margin = P_CD(i) - Net_Load;
+            P_margin = P_CD(i) - Net_Load;   % grid headroom
 
             if P_margin > 0
+                % SOC-based charging power from curve
+                [~,~,P_vec,~] = chargingPowerAndEnergy( ...
+                    SOC_now, SOC_max, E_BESS);
 
-                SOC_now  = SOC{i}(t);
-                SOC_next = min(SOC_now + 1, SOC_max);
+                P_soc = P_vec(1);  % instantaneous allowed power (kW)
 
-                [~,~,P_batt_vec,~] = ...
-                    chargingPowerAndEnergy(SOC_now, SOC_next, E_BESS);
+                % actual charging power
+                P_BC{i}(t) = min(P_margin, P_soc);
 
-                P_batt_max = max(P_batt_vec);
-
-                P_BC{i}(t) = min([P_margin, beta_ch, P_batt_max]);
-
+                % SOC update
                 dSOC = (eta_BC * P_BC{i}(t) * dt / E_BESS) * 100;
-                SOC{i}(t+1) = min(SOC{i}(t) + dSOC, SOC_max);
+                SOC{i}(t+1) = min(SOC_now + dSOC, SOC_max);
             else
-                SOC{i}(t+1) = SOC{i}(t);
+                SOC{i}(t+1) = SOC_now;
             end
 
         % =====================================================
-        % DISCHARGING REGION: Net_Load > P_CD
+        % DISCHARGING MODE (overload shaving)
         % =====================================================
-        elseif Net_Load > P_CD(i) && SOC{i}(t) > SOC_min
+        elseif Net_Load > P_CD(i) && SOC_now > SOC_min
 
             overload = Net_Load - P_CD(i);
 
-            [~,~,~,~,P_dis_SOC] = ...
-                dischargingPowerAndEnergy(SOC{i}(t), SOC_min, E_BESS);
+            % SOC-based discharging power from curve
+            [~,~,~,~,P_soc] = dischargingPowerAndEnergy( ...
+                SOC_now, SOC_min, E_BESS, SOC_now);
 
-            P_BD{i}(t) = min([overload, beta_dis, P_dis_SOC]);
+            % actual discharging power
+            P_BD{i}(t) = min(overload, P_soc);
 
+            % SOC update
             dSOC = (P_BD{i}(t) * dt) / (eta_BD * E_BESS) * 100;
-            SOC{i}(t+1) = max(SOC{i}(t) - dSOC, SOC_min);
+            SOC{i}(t+1) = max(SOC_now - dSOC, SOC_min);
 
         % =====================================================
-        % IDLE REGION
+        % IDLE
         % =====================================================
         else
-            SOC{i}(t+1) = SOC{i}(t);
+            SOC{i}(t+1) = SOC_now;
         end
 
     end
 end
+
 
 %% ---------------------------
 % OUTPUT STRUCTURE
@@ -167,10 +167,8 @@ BSA.SOC_min     = SOC_min;
 BSA.SOC_max     = SOC_max;
 
 BSA.rho_PUR     = rho_PUR;
-BSA.rho_SELL    = rho_SELL;
 
 BSA.Omega_BC    = Omega_BC;
-BSA.Omega_BD    = Omega_BD;
 
 BSA.E_EV_day    = E_EV_day;
 % Final grid power and energy (needed for FPM without Excel)
