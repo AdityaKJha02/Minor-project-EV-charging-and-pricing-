@@ -3,10 +3,9 @@ function BSA = BSA_step1_step2( ...
         sheetNames_EV, sheetNames_PV, ...
         E_BESS)
 
-
 % =========================================================
 % Battery Scheduling Algorithm
-% Implicit mutual exclusivity via grid constraints
+% SOC-based, power-limited, grid-safe
 % 10-minute resolution
 % =========================================================
 
@@ -14,31 +13,16 @@ function BSA = BSA_step1_step2( ...
 % PARAMETERS
 % ---------------------------
 SOC_min = 20;          % %
-SOC_max = 90;% %
-nFCS = 6;
-P_CD = zeros(1, nFCS);
-P_EV = cell(1, nFCS);
-
-for i = 1:nFCS
-    % Read EV power from Column G of each sheet
-    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
-    
-    % First 24 hours (144 slots), Column G
-    P_EV{i} = EV_temp(1:144, 7);
-
-    % Contracted demand = peak EV demand
-    P_CD(i) = max(P_EV{i});
-end
-
-
-
+SOC_max = 90;          % %
 
 eta_BC = 0.92;
 eta_BD = 0.90;
 
-         % kWh
+% -------- BESS RATINGS (FIXED AS REQUESTED) --------
+P_BESS_CH_MAX = 900;   % kW (max charging power)
+P_BESS_DIS_MAX = 177;  % kW (max discharging power)
 
-dt     = 1/6;          % hour
+dt     = 1/6;          % hour (10 min)
 Nslots = 144;
 nFCS   = 6;
 
@@ -46,23 +30,18 @@ nFCS   = 6;
 % READ RTP DATA
 % ---------------------------
 rtp_raw = readmatrix(RTP_file);
+rho_PUR = rtp_raw(1:Nslots,2);
+rho_PUR = rho_PUR(:);
 
-rho_PUR  = rtp_raw(1:Nslots,2);
-
-rho_PUR  = rho_PUR(:);
-
-%% ---------------------------
-% PRICE PRIORITY ORDERING
-% ---------------------------
-[~, Omega_BC] = sort(rho_PUR,  'ascend');    % cheap hours
+[~, Omega_BC] = sort(rho_PUR,'ascend');   % cheap → expensive
 
 %% ---------------------------
 % READ EV & PV DATA
 % ---------------------------
-P_EV = cell(1,nFCS);
+P_EV      = cell(1,nFCS);
 P_PV_avg = cell(1,nFCS);
 P_PV_max = cell(1,nFCS);
-
+P_CD     = zeros(1,nFCS);
 E_EV_day = zeros(1,nFCS);
 
 for i = 1:nFCS
@@ -74,82 +53,90 @@ for i = 1:nFCS
     P_PV_avg{i} = PV_temp(1:Nslots,2);
     P_PV_max{i} = PV_temp(1:Nslots,3);
 
+    % Contract demand = peak EV demand (unchanged logic)
+    P_CD(i) = max(P_EV{i});
+
     E_EV_day(i) = dt * sum(P_EV{i});
 end
 
 %% ---------------------------
-% BATTERY SCHEDULING (SOC-DEPENDENT POWER ONLY)
+% BATTERY SCHEDULING
 % ---------------------------
-
 P_BC = cell(1,nFCS);
 P_BD = cell(1,nFCS);
 SOC  = cell(1,nFCS);
 
 for i = 1:nFCS
 
-    P_BC{i} = zeros(Nslots,1);   % charging power (kW)
-    P_BD{i} = zeros(Nslots,1);   % discharging power (kW)
+    P_BC{i} = zeros(Nslots,1);
+    P_BD{i} = zeros(Nslots,1);
 
     SOC{i} = zeros(Nslots+1,1);
-    SOC{i}(1) = SOC_min;
+    SOC{i}(1) = SOC_min;   % unchanged initial SOC
 
-    for t = 1:Nslots
+    for k = 1:Nslots
+    t = Omega_BC(k);
 
-        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+    Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+
         SOC_now  = SOC{i}(t);
 
-        % =====================================================
-        % CHARGING MODE (available grid margin)
-        % =====================================================
+        % ===================== CHARGING =====================
         if Net_Load <= P_CD(i) && SOC_now < SOC_max
 
-            P_margin = P_CD(i) - Net_Load;   % grid headroom
+            P_margin = P_CD(i) - Net_Load;
 
             if P_margin > 0
-                % SOC-based charging power from curve
+                % SOC-based charging power (from fixed function)
                 [~,~,P_vec,~] = chargingPowerAndEnergy( ...
-                    SOC_now, SOC_max, E_BESS);
+                    SOC_now, SOC_now + eps, E_BESS);
 
-                P_soc = P_vec(1);  % instantaneous allowed power (kW)
+                % Apply charging power limit
+                P_soc = min(P_vec(1), P_BESS_CH_MAX);
 
-                % actual charging power
+                % Final charging power
                 P_BC{i}(t) = min(P_margin, P_soc);
 
                 % SOC update
-                dSOC = (eta_BC * P_BC{i}(t) * dt / E_BESS) * 100;
+                E_ch = eta_BC * P_BC{i}(t) * dt;   % kWh
+dSOC = (E_ch / E_BESS) * 100;
+
                 SOC{i}(t+1) = min(SOC_now + dSOC, SOC_max);
             else
                 SOC{i}(t+1) = SOC_now;
             end
 
-        % =====================================================
-        % DISCHARGING MODE (overload shaving)
-        % =====================================================
+        % ===================== DISCHARGING =====================
         elseif Net_Load > P_CD(i) && SOC_now > SOC_min
 
             overload = Net_Load - P_CD(i);
 
-            % SOC-based discharging power from curve
+            % SOC-based discharging power (from fixed function)
             [~,~,~,~,P_soc] = dischargingPowerAndEnergy( ...
                 SOC_now, SOC_min, E_BESS, SOC_now);
 
-            % actual discharging power
+            % Apply discharging power limit
+            P_soc = min(P_soc, P_BESS_DIS_MAX);
+
+            % Battery can only cover part of overload
             P_BD{i}(t) = min(overload, P_soc);
 
+            % Remaining overload is automatically supplied by grid
+            % (no extra code needed)
+
             % SOC update
-            dSOC = (P_BD{i}(t) * dt) / (eta_BD * E_BESS) * 100;
+            E_dis = (P_BD{i}(t) * dt) / eta_BD;   % kWh
+dSOC  = (E_dis / E_BESS) * 100;
+
             SOC{i}(t+1) = max(SOC_now - dSOC, SOC_min);
 
-        % =====================================================
-        % IDLE
-        % =====================================================
+        % ===================== IDLE =====================
         else
             SOC{i}(t+1) = SOC_now;
         end
 
     end
 end
-
 
 %% ---------------------------
 % OUTPUT STRUCTURE
@@ -167,12 +154,12 @@ BSA.SOC_min     = SOC_min;
 BSA.SOC_max     = SOC_max;
 
 BSA.rho_PUR     = rho_PUR;
-
 BSA.Omega_BC    = Omega_BC;
 
 BSA.E_EV_day    = E_EV_day;
-% Final grid power and energy (needed for FPM without Excel)
-BSA.P_FCS = cell(1,nFCS);
+
+% Final grid power and energy
+BSA.P_FCS  = cell(1,nFCS);
 BSA.E_GRID = cell(1,nFCS);
 
 for i = 1:nFCS
@@ -182,9 +169,7 @@ for i = 1:nFCS
       + BSA.P_BC{i} ...
       - BSA.P_BD{i};
 
-    BSA.E_GRID{i} = BSA.P_FCS{i} * dt;   % kWh per slot
+    BSA.E_GRID{i} = BSA.P_FCS{i} * dt;
 end
 
 end
-
-
