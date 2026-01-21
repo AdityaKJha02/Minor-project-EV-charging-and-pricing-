@@ -4,10 +4,8 @@ clc; clear; close all;
 % STATION DATA (FIXED FOR ALL CASES)
 % =========================================================
 N_co    = [4 2 1 1 1 2];                      % chargers per FCS
-beta_SS = [424.8 283.2 177 106.2 212.4 150];  % substation capacity (kW)
 
 nFCS = numel(N_co);
-N_co = [4, 2, 1, 1, 1, 2];
 
 PV_module_area = 2.6;     % m^2
 A_fc = zeros(1, length(N_co));
@@ -53,6 +51,12 @@ sheetNames_PV = {
     'NPV_408'};
 
 tempExcel = 'TEMP_BSA_FPM.xlsx';
+beta_SS = zeros(1, nFCS);   % substation capacity (kW)
+
+for i = 1:nFCS
+    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
+    beta_SS(i) = max(EV_temp(:,7));   % column 7 = EV power (kW)
+end
 
 %% =========================================================
 % FPM PARAMETERS (PAPER-DEFINED)
