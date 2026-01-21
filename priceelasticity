@@ -1,0 +1,175 @@
+clc; clear; close all;
+
+%% ================================
+% FILE INPUTS
+% ================================
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+
+sheetNames_EV = {
+    'EVFCS_1_6_8'
+    'EVFCS_2_12_13'
+    'EVFCS_3_21_20'
+    'EVFCS_4_6_5'
+    'EVFCS_5_6_2'
+    'EVFCS_6_11_12'
+};
+
+%% ================================
+% SETTINGS
+% ================================
+fcsID = 1;
+timeGrid_min = (0:10:1430)';
+
+%% ================================
+% RUN PED / DPM
+% ================================
+[N_EV_DPM, N_EV_approx, E_EV_DPM, tau_h, kappa] = compute_PED_DPM( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID);
+
+%% ================================
+% COMPUTE FPM ENERGY (REFERENCE)
+% ================================
+dt = 1/6;
+EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+P_EV = EV_temp(:,7);
+timeCol = EV_temp(:,3);
+
+E_EV_FPM_h = zeros(size(timeGrid_min));
+
+for k = 1:numel(timeGrid_min)
+    idx = find(timeCol == timeGrid_min(k),1);
+    if ~isempty(idx)
+        E_EV_FPM_h(k) = P_EV(idx) * dt;
+    end
+end
+
+%% ================================
+% VALIDATION CHECKS
+% ================================
+fprintf('\n=========== VALIDATION ===========\n');
+fprintf('Total EV energy (FPM) = %.4f kWh\n', sum(E_EV_FPM_h));
+fprintf('Total EV energy (DPM) = %.4f kWh\n', sum(E_EV_DPM));
+fprintf('Difference            = %.6e kWh\n', ...
+        sum(E_EV_DPM) - sum(E_EV_FPM_h));
+
+%% ================================
+% DISPLAY TABLE
+% ================================
+
+
+
+
+T = table( ...
+    timeGrid_min, ...
+    tau_h, ...
+    N_EV_DPM, ...
+    N_EV_approx, ...
+    E_EV_FPM_h, ...
+    E_EV_DPM, ...
+    'VariableNames', ...
+    {'Time_min', ...
+     'tau_h', ...
+     'N_EV_DPM_frac', ...
+     'N_EV_DPM_int', ...
+     'E_EV_FPM_kWh', ...
+     'E_EV_DPM_kWh'} );
+
+disp(T(1:144,:));   % show first 50 rows
+
+fprintf('\n=== EV COUNT CHECK (FCS %d) ===\n', fcsID);
+fprintf('Total EVs (fractional) = %.3f\n', sum(N_EV_DPM));
+fprintf('Total EVs (integer)    = %d\n',   sum(N_EV_approx));
+
+
+%% ================================
+% PLOT
+% ================================
+figure;
+subplot(3,1,1)
+plot(timeGrid_min/60, tau_h,'LineWidth',1.5)
+ylabel('\tau^h'), grid on
+
+subplot(3,1,2)
+stem(timeGrid_min/60, N_EV_DPM,'filled')
+ylabel('N_{EV}^{DPM}'), grid on
+
+subplot(3,1,3)
+plot(timeGrid_min/60, E_EV_DPM,'LineWidth',1.5)
+ylabel('E_{EV}^{DPM} (kWh)')
+xlabel('Time (hour)')
+grid on
+
+sgtitle(['PED/DPM Verification – FCS ',num2str(fcsID)])
+
+
+
+
+
+
+
+
+
+%% ================================
+% TIME GRID
+% ================================
+timeGrid_min = (0:10:1430)';   % 144 slots
+
+nFCS = numel(sheetNames_EV);
+
+%% ================================
+% RUN DPM FOR ALL FCSs
+% ================================
+N_EV_approx_all = zeros(144, nFCS);
+totalEV_day_all = zeros(nFCS,1);
+
+for fcsID = 1:nFCS
+
+    [~, N_EV_approx, ~, ~, ~] = compute_PED_DPM( ...
+        timeGrid_min, RTP_file, ...
+        EV_file, sheetNames_EV, fcsID);
+
+    N_EV_approx_all(:,fcsID) = N_EV_approx;
+    totalEV_day_all(fcsID)   = sum(N_EV_approx);
+
+end
+
+%% ================================
+% HOURLY AGGREGATION (10-min → hour)
+% ================================
+% Reshape: 6 rows (10-min slots) × 24 columns (hours)
+N_EV_hourly_all = zeros(24, nFCS);
+
+for fcsID = 1:nFCS
+    tmp = reshape(N_EV_approx_all(:,fcsID), 6, 24);
+    N_EV_hourly_all(:,fcsID) = sum(tmp,1)';
+end
+
+%% ================================
+% WEIGHT_HOURLY COMPUTATION
+% ================================
+% For selected FCS (example: FCS 1)
+selectedFCS = 1;
+
+N_EV_hourly = N_EV_hourly_all(:, selectedFCS);
+
+weight_hourly = ...
+    (sum(N_EV_hourly) / sum(totalEV_day_all)) * 9.88;
+
+%% ================================
+% WRITE TO EXCEL (1 SHEET, 1×24)
+% ================================
+outputFile = 'Hourly_EV_Weights.xlsx';
+
+hourLabels = strcat("H", string(0:23));
+
+T = array2table(N_EV_hourly', ...
+    'VariableNames', hourLabels);
+
+writetable(T, outputFile, 'Sheet', 'Hourly_EV');
+
+fprintf('Excel file written: %s\n', outputFile);
+fprintf('Weight_hourly = %.4f\n', weight_hourly);
+
+fprintf('Sum of weights = %.6f\n', sum(weight_hourly));
