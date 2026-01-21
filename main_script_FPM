@@ -1,190 +1,122 @@
-function BSA = BSA_step1_step2( ...
+clc; clear; close all;
+
+%% =========================================================
+% STATION DATA (FIXED FOR ALL CASES)
+% =========================================================
+N_co    = [4 2 1 1 1 2];                      % chargers per FCS
+beta_SS = [424.8 283.2 177 106.2 212.4 150];  % substation capacity (kW)
+
+nFCS = numel(N_co);
+N_co = [4, 2, 1, 1, 1, 2];
+
+PV_module_area = 2.6;     % m^2
+A_fc = zeros(1, length(N_co));
+
+for i = 1:length(N_co)
+    A_fc(i) = Area_calc(N_co(i));
+end
+
+N_pv = zeros(1,length(N_co));
+for i = 1:length(N_co)
+    N_pv(i) = round(0.85 * A_fc(i) / PV_module_area);
+end
+
+%% =========================================================
+% BATTERY SIZE SWEEP (Fig. 7)
+% =========================================================
+batterySizes = 50:50:300;   % kWh
+nB = numel(batterySizes);
+
+FP_vec = zeros(nB,1);
+
+%% =========================================================
+% FILE INPUTS
+% =========================================================
+EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+PV_file  = 'PV_Results_6_NPV_10min.xlsx';
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+
+sheetNames_EV = {
+    'EVFCS_1_6_8'
+    'EVFCS_2_12_13'
+    'EVFCS_3_21_20'
+    'EVFCS_4_6_5'
+    'EVFCS_5_6_2'
+    'EVFCS_6_11_12'};
+
+sheetNames_PV = {
+    'NPV_400'
+    'NPV_390'
+    'NPV_420'
+    'NPV_405'
+    'NPV_397'
+    'NPV_408'};
+
+tempExcel = 'TEMP_BSA_FPM.xlsx';
+
+%% =========================================================
+% FPM PARAMETERS (PAPER-DEFINED)
+% =========================================================
+params.dt          = 1/6;      % 10 minutes
+params.PM_DES      = .25;     % desired profit margin
+params.rho_SELL_0  = 10.0;      % Rs/kWh
+params.rho_SELL_max= 30.0;     % Rs/kWh
+params.delta_rho   = 0.1;      % Rs/kWh step
+
+rtp = readmatrix(RTP_file);
+params.rho_PUR = rtp(1:144,2); % purchasing price (Rs/kWh)
+
+%% =========================================================
+% MAIN OPTIMIZATION LOOP (Fig. 7 logic)
+% =========================================================
+for k = 1:nB
+
+    fprintf('Running BESS size = %d kWh\n', batterySizes(k));
+
+    % -----------------------------------------------------
+    % FIXED COSTS (paper Eq. 35 + Eq. 31)
+    % -----------------------------------------------------
+    batterySize_vec = batterySizes(k) * ones(1,6);  % OR custom per-FCS sizes
+
+params.C_FIX = Cd_fixcost_FPM( ...
+    batterySize_vec, ...
+    N_co, ...
+    beta_SS, ...
+    N_pv );
+
+
+    params.C_OandM = Cd_OandM_FPM(params.C_FIX);
+       % <<< ADD THIS LINE
+params.E_BESS = batterySizes(k);
+
+
+    % -----------------------------------------------------
+    % BATTERY SCHEDULING (BSA)
+    % -----------------------------------------------------
+    BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
-        E_BESS)
+        batterySizes(k));
 
+    % Export BSA results to Excel
+    BSA_step5_generateExcel(BSA, tempExcel);
 
+    % -----------------------------------------------------
+    % RUN FPM (Eqs. 23, 25, 33, 34)
+    % -----------------------------------------------------
+    FPM = run_FPM_from_BSA_Excel(params, tempExcel);
+
+    FP_vec(k) = FPM.rho_SELL;
+end
+
+%% =========================================================
+% PLOT – FIGURE 7 (PAPER)
 % =========================================================
-% Battery Scheduling Algorithm
-% Implicit mutual exclusivity via grid constraints
-% 10-minute resolution
-% =========================================================
-
-%% ---------------------------
-% PARAMETERS
-% ---------------------------
-SOC_min = 20;          % %
-SOC_max = 90;% %
-nFCS = 6;
-P_CD = zeros(1, nFCS);
-P_EV = cell(1, nFCS);
-
-for i = 1:nFCS
-    % Read EV power from Column G of each sheet
-    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
-    
-    % First 24 hours (144 slots), Column G
-    P_EV{i} = EV_temp(1:144, 7);
-
-    % Contracted demand = peak EV demand
-    P_CD(i) = max(P_EV{i});
-end
-
-
-
-
-eta_BC = 0.92;
-eta_BD = 0.90;
-
-         % kWh
-
-dt     = 1/6;          % hour
-Nslots = 144;
-nFCS   = 6;
-
-%% ---------------------------
-% READ RTP DATA
-% ---------------------------
-rtp_raw = readmatrix(RTP_file);
-
-rho_PUR  = rtp_raw(1:Nslots,2);
-
-rho_PUR  = rho_PUR(:);
-
-%% ---------------------------
-% PRICE PRIORITY ORDERING
-% ---------------------------
-[~, Omega_BC] = sort(rho_PUR,  'ascend');    % cheap hours
-
-%% ---------------------------
-% READ EV & PV DATA
-% ---------------------------
-P_EV = cell(1,nFCS);
-P_PV_avg = cell(1,nFCS);
-P_PV_max = cell(1,nFCS);
-
-E_EV_day = zeros(1,nFCS);
-
-for i = 1:nFCS
-
-    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
-    P_EV{i} = EV_temp(1:Nslots,7);
-
-    PV_temp = readmatrix(PV_file,'Sheet',sheetNames_PV{i});
-    P_PV_avg{i} = PV_temp(1:Nslots,2);
-    P_PV_max{i} = PV_temp(1:Nslots,3);
-
-    E_EV_day(i) = dt * sum(P_EV{i});
-end
-
-%% ---------------------------
-% BATTERY SCHEDULING (SOC-DEPENDENT POWER ONLY)
-% ---------------------------
-
-P_BC = cell(1,nFCS);
-P_BD = cell(1,nFCS);
-SOC  = cell(1,nFCS);
-
-for i = 1:nFCS
-
-    P_BC{i} = zeros(Nslots,1);   % charging power (kW)
-    P_BD{i} = zeros(Nslots,1);   % discharging power (kW)
-
-    SOC{i} = zeros(Nslots+1,1);
-    SOC{i}(1) = SOC_min;
-
-    for t = 1:Nslots
-
-        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
-        SOC_now  = SOC{i}(t);
-
-        % =====================================================
-        % CHARGING MODE (available grid margin)
-        % =====================================================
-        if Net_Load <= P_CD(i) && SOC_now < SOC_max
-
-            P_margin = P_CD(i) - Net_Load;   % grid headroom
-
-            if P_margin > 0
-                % SOC-based charging power from curve
-                [~,~,P_vec,~] = chargingPowerAndEnergy( ...
-                    SOC_now, SOC_max, E_BESS);
-
-                P_soc = P_vec(1);  % instantaneous allowed power (kW)
-
-                % actual charging power
-                P_BC{i}(t) = min(P_margin, P_soc);
-
-                % SOC update
-                dSOC = (eta_BC * P_BC{i}(t) * dt / E_BESS) * 100;
-                SOC{i}(t+1) = min(SOC_now + dSOC, SOC_max);
-            else
-                SOC{i}(t+1) = SOC_now;
-            end
-
-        % =====================================================
-        % DISCHARGING MODE (overload shaving)
-        % =====================================================
-        elseif Net_Load > P_CD(i) && SOC_now > SOC_min
-
-            overload = Net_Load - P_CD(i);
-
-            % SOC-based discharging power from curve
-            [~,~,~,~,P_soc] = dischargingPowerAndEnergy( ...
-                SOC_now, SOC_min, E_BESS, SOC_now);
-
-            % actual discharging power
-            P_BD{i}(t) = min(overload, P_soc);
-
-            % SOC update
-            dSOC = (P_BD{i}(t) * dt) / (eta_BD * E_BESS) * 100;
-            SOC{i}(t+1) = max(SOC_now - dSOC, SOC_min);
-
-        % =====================================================
-        % IDLE
-        % =====================================================
-        else
-            SOC{i}(t+1) = SOC_now;
-        end
-
-    end
-end
-
-
-%% ---------------------------
-% OUTPUT STRUCTURE
-% ---------------------------
-BSA.P_EV        = P_EV;
-BSA.P_PV_avg    = P_PV_avg;
-BSA.P_PV_max    = P_PV_max;
-
-BSA.P_BC        = P_BC;
-BSA.P_BD        = P_BD;
-BSA.SOC         = SOC;
-
-BSA.P_CD        = P_CD;
-BSA.SOC_min     = SOC_min;
-BSA.SOC_max     = SOC_max;
-
-BSA.rho_PUR     = rho_PUR;
-
-BSA.Omega_BC    = Omega_BC;
-
-BSA.E_EV_day    = E_EV_day;
-% Final grid power and energy (needed for FPM without Excel)
-BSA.P_FCS = cell(1,nFCS);
-BSA.E_GRID = cell(1,nFCS);
-
-for i = 1:nFCS
-    BSA.P_FCS{i} = ...
-        BSA.P_EV{i} ...
-      - BSA.P_PV_avg{i} ...
-      + BSA.P_BC{i} ...
-      - BSA.P_BD{i};
-
-    BSA.E_GRID{i} = BSA.P_FCS{i} * dt;   % kWh per slot
-end
-
-end
-
-
+figure;
+plot(batterySizes, FP_vec, '-o', ...
+     'LineWidth', 2, ...
+     'MarkerFaceColor','r');
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Flat price FP (₹/kWh)');
+title('Optimized size of BESS for proposed FPM');
