@@ -3,9 +3,10 @@ function BSA = BSA_step1_step2( ...
         sheetNames_EV, sheetNames_PV, ...
         E_BESS)
 
+
 % =========================================================
 % Battery Scheduling Algorithm
-% SOC-based, power-limited, grid-safe
+% Implicit mutual exclusivity via grid constraints
 % 10-minute resolution
 % =========================================================
 
@@ -13,16 +14,16 @@ function BSA = BSA_step1_step2( ...
 % PARAMETERS
 % ---------------------------
 SOC_min = 20;          % %
-SOC_max = 90;          % %
+SOC_max = 80;          % %
 
-eta_BC = 0.92;
-eta_BD = 0.90;
+beta_ch  = 150;        % kW
+beta_dis = 150;        % kW
 
-% -------- BESS RATINGS (FIXED AS REQUESTED) --------
-P_BESS_CH_MAX = 900;   % kW (max charging power)
-P_BESS_DIS_MAX = 177;  % kW (max discharging power)
+eta_BC = 0.95;
+eta_BD = 0.95;
 
-dt     = 1/6;          % hour (10 min)
+
+dt     = 1/6;          % hour
 Nslots = 144;
 nFCS   = 6;
 
@@ -30,37 +31,61 @@ nFCS   = 6;
 % READ RTP DATA
 % ---------------------------
 rtp_raw = readmatrix(RTP_file);
-rho_PUR = rtp_raw(1:Nslots,2);
-rho_PUR = rho_PUR(:);
 
-[~, Omega_BC] = sort(rho_PUR,'ascend');   % cheap → expensive
+rho_PUR  = rtp_raw(1:Nslots,2);
+rho_SELL = rtp_raw(1:Nslots,3);
+
+rho_PUR  = rho_PUR(:);
+rho_SELL = rho_SELL(:);
+
+%% ---------------------------
+% PRICE PRIORITY ORDERING
+% ---------------------------
+[~, Omega_BC] = sort(rho_PUR,  'ascend');    % cheap hours
+[~, Omega_BD] = sort(rho_SELL, 'descend');   % high revenue hours
 
 %% ---------------------------
 % READ EV & PV DATA
 % ---------------------------
-P_EV      = cell(1,nFCS);
+%% ---------------------------
+% READ EV & PV DATA
+% ---------------------------
+P_EV = cell(1,nFCS);
 P_PV_avg = cell(1,nFCS);
 P_PV_max = cell(1,nFCS);
-P_CD     = zeros(1,nFCS);
+
 E_EV_day = zeros(1,nFCS);
+P_CD     = zeros(1,nFCS);   % 🔑 dynamically computed
 
 for i = 1:nFCS
 
+    % ---------------------------
+    % EV load (column 7)
+    % ---------------------------
     EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
     P_EV{i} = EV_temp(1:Nslots,7);
 
+    % 🔑 Contract demand = peak EV load
+    P_CD(i) = max(P_EV{i})/2.5;
+
+    % ---------------------------
+    % PV generation
+    % ---------------------------
     PV_temp = readmatrix(PV_file,'Sheet',sheetNames_PV{i});
     P_PV_avg{i} = PV_temp(1:Nslots,2);
     P_PV_max{i} = PV_temp(1:Nslots,3);
 
-    % Contract demand = peak EV demand (unchanged logic)
-    P_CD(i) = max(P_EV{i});
-
+    % ---------------------------
+    % Daily EV energy
+    % ---------------------------
     E_EV_day(i) = dt * sum(P_EV{i});
 end
 
+
+
 %% ---------------------------
 % BATTERY SCHEDULING
+% (Implicit exclusivity via Net_Load)
 % ---------------------------
 P_BC = cell(1,nFCS);
 P_BD = cell(1,nFCS);
@@ -72,67 +97,57 @@ for i = 1:nFCS
     P_BD{i} = zeros(Nslots,1);
 
     SOC{i} = zeros(Nslots+1,1);
-    SOC{i}(1) = SOC_min;   % unchanged initial SOC
+    SOC{i}(1) = SOC_min;
 
-    for k = 1:Nslots
-    t = Omega_BC(k);
+    for t = 1:Nslots
 
-    Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
 
-        SOC_now  = SOC{i}(t);
-
-        % ===================== CHARGING =====================
-        if Net_Load <= P_CD(i) && SOC_now < SOC_max
+        % =====================================================
+        % CHARGING REGION: Net_Load ≤ P_CD
+        % =====================================================
+        if Net_Load <= P_CD(i) && SOC{i}(t) < SOC_max
 
             P_margin = P_CD(i) - Net_Load;
 
             if P_margin > 0
-                % SOC-based charging power (from fixed function)
-                [~,~,P_vec,~] = chargingPowerAndEnergy( ...
-                    SOC_now, SOC_now + eps, E_BESS);
 
-                % Apply charging power limit
-                P_soc = min(P_vec(1), P_BESS_CH_MAX);
+                SOC_now  = SOC{i}(t);
+                SOC_next = min(SOC_now + 1, SOC_max);
 
-                % Final charging power
-                P_BC{i}(t) = min(P_margin, P_soc);
+                [~,~,P_batt_vec,~] = ...
+                    chargingPowerAndEnergy(SOC_now, SOC_next, E_BESS);
 
-                % SOC update
-                E_ch = eta_BC * P_BC{i}(t) * dt;   % kWh
-dSOC = (E_ch / E_BESS) * 100;
+                P_batt_max = max(P_batt_vec);
 
-                SOC{i}(t+1) = min(SOC_now + dSOC, SOC_max);
+                P_BC{i}(t) = min([P_margin, beta_ch, P_batt_max]);
+
+                dSOC = (eta_BC * P_BC{i}(t) * dt / E_BESS) * 100;
+                SOC{i}(t+1) = min(SOC{i}(t) + dSOC, SOC_max);
             else
-                SOC{i}(t+1) = SOC_now;
+                SOC{i}(t+1) = SOC{i}(t);
             end
 
-        % ===================== DISCHARGING =====================
-        elseif Net_Load > P_CD(i) && SOC_now > SOC_min
+        % =====================================================
+        % DISCHARGING REGION: Net_Load > P_CD
+        % =====================================================
+        elseif Net_Load > P_CD(i) && SOC{i}(t) > SOC_min
 
             overload = Net_Load - P_CD(i);
 
-            % SOC-based discharging power (from fixed function)
-            [~,~,~,~,P_soc] = dischargingPowerAndEnergy( ...
-                SOC_now, SOC_min, E_BESS, SOC_now);
+            [~,~,~,~,P_dis_SOC] = ...
+                dischargingPowerAndEnergy(SOC{i}(t), SOC_min, E_BESS);
 
-            % Apply discharging power limit
-            P_soc = min(P_soc, P_BESS_DIS_MAX);
+            P_BD{i}(t) = min([overload, beta_dis, P_dis_SOC]);
 
-            % Battery can only cover part of overload
-            P_BD{i}(t) = min(overload, P_soc);
+            dSOC = (P_BD{i}(t) * dt) / (eta_BD * E_BESS) * 100;
+            SOC{i}(t+1) = max(SOC{i}(t) - dSOC, SOC_min);
 
-            % Remaining overload is automatically supplied by grid
-            % (no extra code needed)
-
-            % SOC update
-            E_dis = (P_BD{i}(t) * dt) / eta_BD;   % kWh
-dSOC  = (E_dis / E_BESS) * 100;
-
-            SOC{i}(t+1) = max(SOC_now - dSOC, SOC_min);
-
-        % ===================== IDLE =====================
+        % =====================================================
+        % IDLE REGION
+        % =====================================================
         else
-            SOC{i}(t+1) = SOC_now;
+            SOC{i}(t+1) = SOC{i}(t);
         end
 
     end
@@ -148,28 +163,18 @@ BSA.P_PV_max    = P_PV_max;
 BSA.P_BC        = P_BC;
 BSA.P_BD        = P_BD;
 BSA.SOC         = SOC;
+BSA.P_CD     = P_CD;     % dynamically computed contract demand
+BSA.E_BESS   = E_BESS;   % battery size used
 
-BSA.P_CD        = P_CD;
 BSA.SOC_min     = SOC_min;
 BSA.SOC_max     = SOC_max;
 
 BSA.rho_PUR     = rho_PUR;
+BSA.rho_SELL    = rho_SELL;
+
 BSA.Omega_BC    = Omega_BC;
+BSA.Omega_BD    = Omega_BD;
 
 BSA.E_EV_day    = E_EV_day;
-
-% Final grid power and energy
-BSA.P_FCS  = cell(1,nFCS);
-BSA.E_GRID = cell(1,nFCS);
-
-for i = 1:nFCS
-    BSA.P_FCS{i} = ...
-        BSA.P_EV{i} ...
-      - BSA.P_PV_avg{i} ...
-      + BSA.P_BC{i} ...
-      - BSA.P_BD{i};
-
-    BSA.E_GRID{i} = BSA.P_FCS{i} * dt;
-end
 
 end
