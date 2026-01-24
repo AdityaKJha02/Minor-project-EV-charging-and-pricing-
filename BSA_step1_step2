@@ -15,6 +15,7 @@ function BSA = BSA_step1_step2( ...
 % ---------------------------
 SOC_min = 20;          % %
 SOC_max = 80;          % %
+SOC_init = 55.2;   % % starting SoC at 0 hr
 
 beta_ch  = 150;        % kW
 beta_dis = 150;        % kW
@@ -97,7 +98,8 @@ for i = 1:nFCS
     P_BD{i} = zeros(Nslots,1);
 
     SOC{i} = zeros(Nslots+1,1);
-    SOC{i}(1) = SOC_min;
+    SOC{i}(1) = SOC_init;
+
 
     for t = 1:Nslots
 
