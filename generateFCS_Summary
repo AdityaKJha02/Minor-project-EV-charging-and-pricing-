@@ -1,0 +1,81 @@
+function generateFCS_Summary( ...
+        arrivalPowerFile, timelineFile, sheetNames_EV)
+
+    outputExcel = 'EVFCS_FCS_Summary.xlsx';
+
+    nFCS = numel(sheetNames_EV);
+
+    for i = 1:nFCS
+        sheet = sheetNames_EV{i};
+
+        %% ================================
+        % FILE 1: 10-min Arrival Power
+        % ================================
+        Tpow = readtable(arrivalPowerFile, 'Sheet', sheet);
+
+        activePorts = Tpow{:,4};
+        portCounts  = zeros(height(Tpow),1);
+
+        for k = 1:height(Tpow)
+            val = string(activePorts{k});
+            if strlength(val) == 0 || ismissing(val)
+                portCounts(k) = 0;
+            else
+                portCounts(k) = numel(strsplit(val, ','));
+            end
+        end
+
+        max_ports_used = max(portCounts);
+
+        power_kW      = Tpow{:,7};
+        max_power     = max(power_kW);
+        avg_power_144 = mean(power_kW(6:149), 'omitnan');
+
+        %% ================================
+        % FILE 2: EV Timeline
+        % ================================
+        Ttime = readtable(timelineFile, 'Sheet', sheet);
+
+        max_port_index = max(Ttime{:,4});
+        avg_wait_min   = mean(Ttime{:,6}, 'omitnan');
+        max_wait_min   = max(Ttime{:,6});
+        avg_charge_min = mean(Ttime{:,8}, 'omitnan');
+        max_charge_min = max(Ttime{:,8});
+        avg_energy_kWh = mean(Ttime{:,12}, 'omitnan');
+
+        %% ================================
+        % SUMMARY TABLE
+        % ================================
+        Summary = table( ...
+            max_ports_used, ...
+            max_power, ...
+            avg_power_144, ...
+            max_port_index, ...
+            avg_wait_min, ...
+            max_wait_min, ...
+            avg_charge_min, ...
+            max_charge_min, ...
+            avg_energy_kWh, ...
+            'VariableNames', { ...
+                'Max_Ports_Used', ...
+                'Max_Power_kW', ...
+                'Avg_Power_144slots_kW', ...
+                'Max_Port_Index', ...
+                'Avg_Wait_min', ...
+                'Max_Wait_min', ...
+                'Avg_Charge_min', ...
+                'Max_Charge_min', ...
+                'Avg_Energy_kWh'});
+
+        %% ================================
+        % WRITE TO ONE EXCEL (MULTI-SHEET)
+        % ================================
+        writetable(Summary, outputExcel, ...
+            'Sheet', sprintf('FCS_%d', i), ...
+            'Range', 'A1');
+
+        fprintf('✔ Written summary for FCS %d\n', i);
+    end
+
+    fprintf('\n✔ Final output file created: %s\n', outputExcel);
+end
