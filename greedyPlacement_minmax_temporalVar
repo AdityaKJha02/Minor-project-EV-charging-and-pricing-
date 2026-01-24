@@ -5,7 +5,6 @@ function [chosenEdges, history] = greedyPlacement_minmax_temporalVar( ...
     baseLoad24h, edgeToBus)
 
 % GREEDY EVFCS PLACEMENT WITH MIN–MAX NORMALISATION (3 OBJECTIVES)
-% Variance = temporal variance of station load over 24 hours
 
 epsNorm = 1e-9;
 
@@ -50,20 +49,19 @@ while size(chosenEdges,1) < numStations && ...
     Sn = minmaxNorm(S, epsNorm);
     Vn = minmaxNorm(V, epsNorm);
 
-    score = wCharge*Cn - wStop*Sn - wVar*Vn;
+    score = wCharge * Cn;
 
     [bestScore, idx] = max(score);
     bestEdge = remainingEdges(idx,:);
 
-    % log
-    history.C{iter} = C;
-    history.S{iter} = S;
-    history.V{iter} = V;
+    history.C{iter}  = C;
+    history.S{iter}  = S;
+    history.V{iter}  = V;
     history.Cn{iter} = Cn;
     history.Sn{iter} = Sn;
     history.Vn{iter} = Vn;
     history.score(iter) = bestScore;
-    history.edge{iter} = bestEdge;
+    history.edge{iter}  = bestEdge;
 
     fprintf(['Selected station %d: edge %d->%d | ', ...
              'trialCharge=%.2f trialStops=%d trialVar=%.2f score=%.4f\n'], ...
@@ -77,8 +75,9 @@ end
 fprintf('[Greedy-MinMax-3OBJ] Finished. Selected %d stations.\n', size(chosenEdges,1));
 end
 
-% ======================= HELPERS =======================
-
+% ========================================================
+% HELPERS
+% ========================================================
 function xnorm = minmaxNorm(x, epsNorm)
 xmin = min(x);
 xmax = max(x);
@@ -89,8 +88,9 @@ else
 end
 end
 
-% ======================= TEMPORAL VAR SIM =======================
-
+% ========================================================
+% TEMPORAL VAR SIMULATION
+% ========================================================
 function [totalCharge_kWh, totalStops, busVar] = ...
     simulateWithStationsTemporalVar(stationEdges, taskPaths, OD, dist, ...
         consRate, numEVs, minSOC, maxSOC, ...
@@ -100,7 +100,6 @@ function [totalCharge_kWh, totalStops, busVar] = ...
 K = size(stationEdges,1);
 totalCharge_pct = 0;
 totalStops = 0;
-
 stationEnergyPerHour = zeros(K,24);
 
 if K == 0
@@ -112,47 +111,113 @@ end
 keys = arrayfun(@(i) sprintf('%d-%d',stationEdges(i,1),stationEdges(i,2)), ...
                 1:K,'UniformOutput',false);
 
+% --- Target SOC distribution (95% in [75,80])
+muTargetSOC    = 77.5;
+sigmaTargetSOC = (80 - 75) / (2*1.96);
+
 for hr = 1:24
-        numEVs_hr = numEVs(hr);
-    if numEVs_hr == 0
-        continue;
-    end
+    numEVs_hr = numEVs(hr);
+    if numEVs_hr == 0, continue; end
 
     for t = 1:numel(taskPaths)
         p = taskPaths{t};
         if isempty(p), continue; end
 
-        muSOC    = (minSOC + maxSOC)/2;          % 72.5
-sigmaSOC = (maxSOC - minSOC)/(2*1.96);   % ≈ 6.38
+        % Initial SOC (unchanged)
+        % -------- INITIAL SOC: 95% inside [minSOC,maxSOC], 5% outside --------
 
-soc = muSOC + sigmaSOC*randn(numEVs_hr,1);
+soc = zeros(numEVs_hr,1);
 
-% hard clamp to physical bounds
-soc = min(max(soc, minSOC), maxSOC);
+% Decide which EVs are in the main 95%
+isMain95 = rand(numEVs_hr,1) <= 0.95;
 
-stopped = false(numEVs_hr,1);
+% ---- 95% vehicles: SOC ~ N(mean, sigma) clipped to [minSOC,maxSOC]
+muSOC    = (minSOC + maxSOC)/2;
+sigmaSOC = (maxSOC - minSOC)/(2*1.96);
+
+soc95 = muSOC + sigmaSOC*randn(sum(isMain95),1);
+soc95 = min(max(soc95, minSOC), maxSOC);
+soc(isMain95) = soc95;
+
+% ---- 5% vehicles: SOC outside range
+nOut = sum(~isMain95);
+
+if nOut > 0
+    % Half below minSOC, half above maxSOC
+    below = rand(nOut,1) < 0.5;
+
+    socOut = zeros(nOut,1);
+
+    % Below minSOC (e.g., minSOC-5 to minSOC)
+    socOut(below) = minSOC - 5*rand(sum(below),1);
+
+    % Above maxSOC (e.g., maxSOC to maxSOC+5)
+    socOut(~below) = maxSOC + 5*rand(sum(~below),1);
+
+    soc(~isMain95) = socOut;
+end
+% -------------------------------------------------------------------
+
+
+        stopped = false(numEVs_hr,1);
 
         for k = 1:(numel(p)-1)
-            u=p(k); v=p(k+1); d=dist(u,v);
+            u = p(k); 
+            v = p(k+1);
+            d = dist(u,v);
 
             idx = find(strcmp(keys,sprintf('%d-%d',u,v)) | ...
                        strcmp(keys,sprintf('%d-%d',v,u)),1);
 
-            if ~isempty(idx)
-                distRem = sum(arrayfun(@(x) dist(p(x),p(x+1)), k:numel(p)-1));
-                neededSOC = distRem * consRate;
+            % --------- CHANGED PART (FINAL SOC LOGIC) ---------
+            % --------- FINAL SOC LOGIC: 95% inside [75,80], 5% outside ---------
+if ~isempty(idx)
 
-                mask = soc < chargeThreshold;
-                charge = max(0, neededSOC - soc(mask));
-                soc(mask) = soc(mask) + charge;
+    mask = soc < chargeThreshold;
+    nCharge = sum(mask);
 
-                stationEnergyPerHour(idx,hr) = ...
-                    stationEnergyPerHour(idx,hr) + sum(charge)/100*battery_kWh;
+    if nCharge > 0
 
-                totalCharge_pct = totalCharge_pct + sum(charge);
-            end
+        % Decide which EVs belong to the 95%
+        isMain95 = rand(nCharge,1) <= 0.95;
 
+        targetSOC = soc(mask);   % default = no extra charge
+
+        % ---- 95% vehicles: SOC ~ N(77.5, σ) clipped to [75,80]
+        muTargetSOC    = 77.5;
+        sigmaTargetSOC = (80 - 75) / (2*1.96);
+
+        if any(isMain95)
+            soc95 = muTargetSOC + sigmaTargetSOC*randn(sum(isMain95),1);
+            soc95 = min(max(soc95,75),80);
+            targetSOC(isMain95) = soc95;
+        end
+
+        % ---- 5% vehicles: charge higher than 80 OR just enough
+        if any(~isMain95)
+            soc5 = 80 + 5*rand(sum(~isMain95),1);  % e.g., 80–85%
+            soc5 = min(soc5, maxSOC);
+            targetSOC(~isMain95) = soc5;
+        end
+
+        % Energy calculation
+        deltaSOC = max(0, targetSOC - soc(mask));
+        soc(mask) = targetSOC;
+
+        stationEnergyPerHour(idx,hr) = ...
+            stationEnergyPerHour(idx,hr) + ...
+            sum(deltaSOC)/100 * battery_kWh;
+
+        totalCharge_pct = totalCharge_pct + sum(deltaSOC);
+    end
+end
+% -----------------------------------------------------------------
+
+            % -------------------------------------------------
+
+            % Driving consumption (unchanged)
             soc = soc - d*consRate;
+
             newStops = (soc < stopSOC) & ~stopped;
             totalStops = totalStops + sum(newStops);
             stopped(newStops) = true;
@@ -163,8 +228,8 @@ end
 
 totalCharge_kWh = totalCharge_pct/100 * battery_kWh;
 
-% === VARIANCE LOGIC YOU ASKED FOR ===
 perStationVar = var(stationEnergyPerHour,0,2);
 busVar = mean(perStationVar);
 
 end
+
