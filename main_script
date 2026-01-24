@@ -162,7 +162,7 @@ speed_kmh = 60;
 kmPerUnit = 2;
 %}
 
-portsPerStation =  [14 11 2 11 7 9];
+portsPerStation =  [14 11 2 11 7 8];
 
 
 %% =========================================================
@@ -212,6 +212,23 @@ chargerPower_kW = 180;      % DC fast charger power
 
 generateEVFCSArrivalAndPowerTimeline_10min( ...
     EVevents, chosenEdges, portsPerStation, battery_kWh);
+%% =========================================================
+%% 12(b) Complete data
+%% =========================================================
+
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+generateFCS_Summary( ...
+    'EVFCS_10min_Arrival_Power.xlsx', ...
+    'EVFCS_EV_Timeline.xlsx', ...
+    sheetNames_EV);
 
 
 %% =========================================================
