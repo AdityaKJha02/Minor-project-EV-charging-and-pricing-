@@ -65,7 +65,25 @@ for hr = 1:24
            evGlobalID = evGlobalID + 1;
            depart_min = (hr-1)*60 + departOffsets(kEV);   % absolute minutes since day start
            % initial SOC sampled uniformly between minSOC and maxSOC (as earlier)
-           soc_init = minSOC + (maxSOC - minSOC) * rand();
+% --- START SOC DISTRIBUTION: 95% inside [minSOC,maxSOC], 5% outside ---
+pStartMain = 0.95;
+
+if rand() <= pStartMain
+    % 95% EVs: normal distribution inside bounds
+    muSOC    = (minSOC + maxSOC) / 2;
+    sigmaSOC = (maxSOC - minSOC) / (2*1.96);   % 95% inside bounds
+    soc_init = muSOC + sigmaSOC * randn();
+    soc_init = min(max(soc_init, minSOC), maxSOC);
+else
+    % 5% EVs: outside bounds
+    if rand() < 0.5
+        % very low SOC
+        soc_init = max(0, minSOC - 5*rand());
+    else
+        % very high SOC
+        soc_init = min(100, maxSOC + 5*rand());
+    end
+end
            % prepare per-EV bookkeeping
            evID = evGlobalID;
            evChargedTimes = 0;
@@ -112,10 +130,25 @@ for hr = 1:24
                    % charging decision: will charge if soc < chargeThreshold
                    if soc_arrival < chargeThreshold
                        % desired SOC to safely finish remaining route (in percent)
-                       neededSOC = rem_units * consRate;   % percent
-                       % target SOC: at least neededSOC, but not exceed maxSOC
-                       targetSOC = min(maxSOC, max(soc_arrival, neededSOC));
-                       deltaSOC_pct = max(0, targetSOC - soc_arrival); % percent to add
+                       % --- Target SOC distribution: 95% in [75,80]
+% Probability that EV follows target SOC policy
+pTarget = 0.95;
+
+if rand() <= pTarget
+    % 95% of EVs → target SOC in [75,80]
+    muTargetSOC    = 77.5;
+    sigmaTargetSOC = (80 - 75)/(2*1.96);
+
+    targetSOC = muTargetSOC + sigmaTargetSOC*randn();
+    targetSOC = min(max(targetSOC,75),80);
+else
+    % 5% of EVs → minimal charging (or legacy behavior)
+    targetSOC = min(maxSOC, soc_arrival + rem_units*consRate);
+end
+
+
+deltaSOC_pct = max(0, targetSOC - soc_arrival);
+
                        if deltaSOC_pct > 0
                            % charging time (minutes) using SOC-based charging curve
 chargeTime_min = charging_time(soc_arrival, soc_arrival + deltaSOC_pct);
@@ -153,9 +186,10 @@ stationPortNextFree{stationIdx} = ports;
                            evChargeEvents(end).charge_min = chargeTime_min;
                            evChargeEvents(end).depart_min = depart_min_event;
                            evChargeEvents(end).soc_before = soc_arrival;
-                           evChargeEvents(end).soc_after = soc_arrival + deltaSOC_pct;
+                           evChargeEvents(end).soc_after = targetSOC;
                            % update SOC to after charging
-                           soc = soc + deltaSOC_pct;
+                           soc = targetSOC;
+
                        end
                    end
                end
@@ -265,6 +299,8 @@ for i = 1:numel(evList)
    EVsummary.numCharges(i) = e.numCharges;
    EVsummary.chargedMultipleTimes(i) = (e.numCharges > 1);
 end
+
+
 % =========================================================
 % PRINT TOTAL ENERGY SOLD PER EVFCS
 % =========================================================
