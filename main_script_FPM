@@ -3,7 +3,7 @@ clc; clear; close all;
 %% =========================================================
 % STATION DATA (FIXED FOR ALL CASES)
 % =========================================================
-N_co    = [4 2 1 1 1 2];                      % chargers per FCS
+N_co = [14 11 2 11 7 9];   % chargers per FCS
 
 nFCS = numel(N_co);
 
@@ -22,7 +22,7 @@ end
 %% =========================================================
 % BATTERY SIZE SWEEP (Fig. 7)
 % =========================================================
-batterySizes = 50:50:300;   % kWh
+batterySizes = 50:50:2000;   % kWh
 nB = numel(batterySizes);
 
 FP_vec = zeros(nB,1);
@@ -35,12 +35,13 @@ PV_file  = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file = 'RTP_grid_cost_10min.xlsx';
 
 sheetNames_EV = {
-    'EVFCS_1_6_8'
-    'EVFCS_2_12_13'
-    'EVFCS_3_21_20'
-    'EVFCS_4_6_5'
-    'EVFCS_5_6_2'
-    'EVFCS_6_11_12'};
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
 
 sheetNames_PV = {
     'NPV_400'
