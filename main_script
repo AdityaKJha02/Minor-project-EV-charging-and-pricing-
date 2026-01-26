@@ -162,7 +162,7 @@ speed_kmh = 60;
 kmPerUnit = 2;
 %}
 
-portsPerStation =  [14 11 2 11 7 8];
+portsPerStation =  [13 10 2 10 6 8];
 
 
 %% =========================================================
@@ -392,7 +392,7 @@ fprintf('✔ STEP-5 completed successfully\n');
 %% =========================================================
 % STATION DATA (FIXED FOR ALL CASES)
 % =========================================================
-N_co = [14 11 2 11 7 9];   % chargers per FCS
+N_co = [13 10 1 10 6 9];   % chargers per FCS
 
 nFCS = numel(N_co);
 
