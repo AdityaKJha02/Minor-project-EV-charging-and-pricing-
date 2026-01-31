@@ -1,0 +1,94 @@
+function [N_EV_CPP, N_EV_int, E_EV_CPP, tau_new, kappa, cpp_idx, price] = ...
+    compute_CPP_tauDriven( ...
+        timeGrid_min, RTP_file, ...
+        EV_file, sheetNames_EV, fcsID, ...
+        multiplier, fracCPP, base_price)
+
+
+% fracCPP = fraction of hours to mark as critical (e.g., 0.1)
+
+nT = numel(timeGrid_min);
+
+%% ---------------------------
+% STEP 1: Base τ from RTP
+% ---------------------------
+M = readmatrix(RTP_file);
+timeRTP = M(:,1);
+rhoSELL = M(:,3);
+
+inv_p = 1./rhoSELL;
+tau_base_all = inv_p./max(inv_p);
+
+tau_base = zeros(nT,1);
+for k=1:nT
+    idx = find(timeRTP==timeGrid_min(k),1);
+    tau_base(k)=tau_base_all(idx);
+end
+
+%% ---------------------------
+% STEP 2: Select lowest-τ hours → CPP
+% ---------------------------
+nCPP = round(fracCPP*nT);
+[~,idxSort] = sort(tau_base,'ascend');
+cpp_idx = idxSort(1:nCPP);
+
+price = base_price * ones(nT,1);
+price(cpp_idx) = multiplier * base_price;
+
+
+%% ---------------------------
+% STEP 3: New τ
+% ---------------------------
+inv_p = 1./price;
+tau_new = inv_p./max(inv_p);
+
+%% ---------------------------
+% STEP 4: Base arrivals
+% ---------------------------
+N_FPM=zeros(nT,1);
+for k=1:nT
+    N_FPM(k)=getEVcountAtTime( ...
+        EV_file,sheetNames_EV,fcsID,timeGrid_min(k));
+end
+
+%% ---------------------------
+% STEP 5: κ
+% ---------------------------
+kappa = sum(N_FPM) / sum(tau_new .* N_FPM);
+
+%% ---------------------------
+% STEP 6: DPM arrivals
+% ---------------------------
+N_EV_CPP = kappa * tau_new .* N_FPM;
+
+%% ---------------------------
+% STEP 7: Energy
+% ---------------------------
+dt=1/6;
+EV_temp=readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+P_EV=EV_temp(:,7);
+timeCol=EV_temp(:,3);
+
+E_FPM=zeros(nT,1);
+for k=1:nT
+    idx=find(timeCol==timeGrid_min(k),1);
+    if ~isempty(idx)
+        E_FPM(k)=P_EV(idx)*dt;
+    end
+end
+
+e_bar=sum(E_FPM)/max(sum(N_FPM),1);
+E_EV_CPP=N_EV_CPP*e_bar;
+
+%% ---------------------------
+% STEP 8: Integerization
+% ---------------------------
+floorEV=floor(N_EV_CPP);
+res=N_EV_CPP-floorEV;
+missing=round(sum(N_EV_CPP)-sum(floorEV));
+
+[~,idx]=sort(res,'descend');
+N_EV_int=floorEV;
+N_EV_int(idx(1:missing))=N_EV_int(idx(1:missing))+1;
+
+end
