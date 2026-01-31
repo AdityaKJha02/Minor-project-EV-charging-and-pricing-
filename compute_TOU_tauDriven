@@ -1,0 +1,102 @@
+function [N_EV_TOU, N_EV_int, E_EV_TOU, tau_new, kappa, bounds, price] = ...
+    compute_TOU_tauDriven( ...
+        timeGrid_min, RTP_file, ...
+        EV_file, sheetNames_EV, fcsID, ...
+        prices, base_price)
+
+
+% prices = [p_off  p_mid  p_peak]
+
+nT = numel(timeGrid_min);
+
+%% ---------------------------
+% STEP 1: Base τ from RTP
+% ---------------------------
+M=readmatrix(RTP_file);
+timeRTP=M(:,1);
+rhoSELL=M(:,3);
+
+inv_p=1./rhoSELL;
+tau_base_all=inv_p./max(inv_p);
+
+tau_base=zeros(nT,1);
+for k=1:nT
+    idx=find(timeRTP==timeGrid_min(k),1);
+    tau_base(k)=tau_base_all(idx);
+end
+
+%% ---------------------------
+% STEP 2: Quantile bounds
+% ---------------------------
+q1 = quantile(tau_base,0.33);
+q2 = quantile(tau_base,0.66);
+bounds = [q1 q2];
+
+price=zeros(nT,1);
+
+for k=1:nT
+    if tau_base(k) >= q2
+        price(k)=prices(1) * base_price;% off-peak
+    elseif tau_base(k) >= q1
+        price(k)=prices(2)* base_price;    % mid
+    else
+        price(k)=prices(3)* base_price;    % peak
+    end
+end
+
+%% ---------------------------
+% STEP 3: New τ
+% ---------------------------
+inv_p=1./price;
+tau_new=inv_p./max(inv_p);
+
+%% ---------------------------
+% STEP 4: Base arrivals
+% ---------------------------
+N_FPM=zeros(nT,1);
+for k=1:nT
+    N_FPM(k)=getEVcountAtTime( ...
+        EV_file,sheetNames_EV,fcsID,timeGrid_min(k));
+end
+
+%% ---------------------------
+% STEP 5: κ
+% ---------------------------
+kappa = sum(N_FPM) / sum(tau_new .* N_FPM);
+
+%% ---------------------------
+% STEP 6: Arrivals
+% ---------------------------
+N_EV_TOU = kappa * tau_new .* N_FPM;
+
+%% ---------------------------
+% STEP 7: Energy
+% ---------------------------
+dt=1/6;
+EV_temp=readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+P_EV=EV_temp(:,7);
+timeCol=EV_temp(:,3);
+
+E_FPM=zeros(nT,1);
+for k=1:nT
+    idx=find(timeCol==timeGrid_min(k),1);
+    if ~isempty(idx)
+        E_FPM(k)=P_EV(idx)*dt;
+    end
+end
+
+e_bar=sum(E_FPM)/max(sum(N_FPM),1);
+E_EV_TOU=N_EV_TOU*e_bar;
+
+%% ---------------------------
+% STEP 8: Integerization
+% ---------------------------
+floorEV=floor(N_EV_TOU);
+res=N_EV_TOU-floorEV;
+missing=round(sum(N_EV_TOU)-sum(floorEV));
+
+[~,idx]=sort(res,'descend');
+N_EV_int=floorEV;
+N_EV_int(idx(1:missing))=N_EV_int(idx(1:missing))+1;
+
+end
