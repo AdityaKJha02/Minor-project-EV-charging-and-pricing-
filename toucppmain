@@ -1,0 +1,270 @@
+%% =========================================================
+%% 17. TAU-DRIVEN CPP & TOU MODELLING (FINAL FIXED)
+%% =========================================================
+
+clear; clc;
+
+%% ================================
+% SETTINGS
+%% ================================
+timeGrid_min = (0:10:1430)';
+EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+PV_file  = 'PV_Results_6_NPV_10min.xlsx';
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+base_price = 10;     % Rs/kWh (or whatever you want)
+
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+sheetNames_PV = {
+    'NPV_400'
+    'NPV_390'
+    'NPV_420'
+    'NPV_405'
+    'NPV_397'
+    'NPV_408'};
+
+
+nFCS = numel(sheetNames_EV);
+
+fracCPP = 0.10;           % lowest 10% tau → CPP
+cpp_multiplier = 3;
+
+tou_prices = [0.6 1.0 1.5];   % off-mid-peak
+
+dt = 1/6;
+
+%% =========================================================
+%% PART A — SINGLE FCS VERIFICATION (FCS 1)
+%% =========================================================
+
+fcsID = 1;
+
+% ---------- CPP ----------
+[N_CPP, N_CPP_int, E_CPP, tau_CPP, ~, ~, price_CPP] = ...
+compute_CPP_tauDriven( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID, ...
+    cpp_multiplier, fracCPP, base_price);
+
+
+
+% ---------- TOU ----------
+[N_TOU, N_TOU_int, E_TOU, tau_TOU, ~, ~, price_TOU] = ...
+compute_TOU_tauDriven( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID, ...
+    tou_prices, base_price);
+
+
+
+%% ================================
+% COMPUTE FPM ENERGY (REFERENCE)
+%% ================================
+
+EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+P_EV = EV_temp(:,7);
+timeCol = EV_temp(:,3);
+
+E_FPM = zeros(size(timeGrid_min));
+
+for k = 1:numel(timeGrid_min)
+    idx = find(timeCol==timeGrid_min(k),1);
+    if ~isempty(idx)
+        E_FPM(k) = P_EV(idx)*dt;
+    end
+end
+
+%% ================================
+% VALIDATION PRINTS
+%% ================================
+
+fprintf('\n=========== VALIDATION (FCS %d) ===========\n',fcsID);
+fprintf('FPM Energy = %.4f kWh\n',sum(E_FPM));
+fprintf('CPP Energy = %.4f kWh\n',sum(E_CPP));
+fprintf('TOU Energy = %.4f kWh\n',sum(E_TOU));
+
+%% ================================
+% DISPLAY TABLES
+%% ================================
+
+Tcpp = table( ...
+timeGrid_min, tau_CPP, ...
+N_CPP, N_CPP_int, ...
+E_FPM, E_CPP, ...
+'VariableNames', ...
+{'Time_min','tau_h','N_EV_frac','N_EV_int','E_EV_FPM_kWh','E_EV_CPP_kWh'});
+
+disp(Tcpp(1:144,:))
+
+Ttou = table( ...
+timeGrid_min, tau_TOU, ...
+N_TOU, N_TOU_int, ...
+E_FPM, E_TOU, ...
+'VariableNames', ...
+{'Time_min','tau_h','N_EV_frac','N_EV_int','E_EV_FPM_kWh','E_EV_TOU_kWh'});
+
+disp(Ttou(1:144,:))
+
+fprintf('\nTotal EVs CPP (int) = %d\n',sum(N_CPP_int));
+fprintf('Total EVs TOU (int) = %d\n',sum(N_TOU_int));
+
+%% =========================================================
+%% PART B — RUN ALL FCS
+%% =========================================================
+
+N_CPP_all = zeros(144,nFCS);
+N_TOU_all = zeros(144,nFCS);
+totalEV_CPP = zeros(nFCS,1);
+totalEV_TOU = zeros(nFCS,1);
+
+for fcsID = 1:nFCS
+
+    [~, N_int, ~, ~, ~, ~] = ...
+    compute_CPP_tauDriven( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID, ...
+    cpp_multiplier, fracCPP, base_price);
+
+    N_CPP_all(:,fcsID) = N_int;
+    totalEV_CPP(fcsID) = sum(N_int);
+
+    [~, N_int, ~, ~, ~, ~] = ...
+    compute_TOU_tauDriven( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID, ...
+    tou_prices, base_price);
+
+    N_TOU_all(:,fcsID) = N_int;
+    totalEV_TOU(fcsID) = sum(N_int);
+
+end
+
+%% =========================================================
+%% PART C — HOURLY AGGREGATION
+%% =========================================================
+
+N_CPP_hourly_all = zeros(24,nFCS);
+N_TOU_hourly_all = zeros(24,nFCS);
+
+for fcsID = 1:nFCS
+    N_CPP_hourly_all(:,fcsID) = sum(reshape(N_CPP_all(:,fcsID),6,24),1)';
+    N_TOU_hourly_all(:,fcsID) = sum(reshape(N_TOU_all(:,fcsID),6,24),1)';
+end
+
+%% =========================================================
+%% PART D — WEIGHT COMPUTATION
+%% =========================================================
+
+selectedFCS = 1;
+
+wCPP = ...
+(sum(N_CPP_hourly_all(:,selectedFCS)) / sum(totalEV_CPP)) ...
+* N_CPP_hourly_all(:,selectedFCS);
+
+wTOU = ...
+(sum(N_TOU_hourly_all(:,selectedFCS)) / sum(totalEV_TOU)) ...
+* N_TOU_hourly_all(:,selectedFCS);
+
+% Normalize
+wCPP = wCPP / sum(wCPP) * 9.88;
+wTOU = wTOU / sum(wTOU) * 9.88;
+
+fprintf('\nSum CPP weights = %.6f\n',sum(wCPP));
+fprintf('Sum TOU weights = %.6f\n',sum(wTOU));
+
+%% =========================================================
+%% PART E — WRITE TWO EXCEL FILES
+%% =========================================================
+
+hourLabels = strcat("H",string(0:23));
+
+Tcpp_w = array2table(wCPP','VariableNames',hourLabels);
+Ttou_w = array2table(wTOU','VariableNames',hourLabels);
+
+writetable(Tcpp_w,'Hourly_EV_Weights_CPP.xlsx');
+writetable(Ttou_w,'Hourly_EV_Weights_TOU.xlsx');
+
+fprintf('\nFiles written:\n');
+fprintf('Hourly_EV_Weights_CPP.xlsx\n');
+fprintf('Hourly_EV_Weights_TOU.xlsx\n');
+
+
+%% =========================================================
+%% PART A2 — DETAILED EXCEL OUTPUT (ALL FCS, CPP & TOU)
+%% =========================================================
+
+CPP_file = 'CPP_Detailed_Results_AllFCS.xlsx';
+TOU_file = 'TOU_Detailed_Results_AllFCS.xlsx';
+
+if exist(CPP_file,'file'), delete(CPP_file); end
+if exist(TOU_file,'file'), delete(TOU_file); end
+
+for fcsID = 1:nFCS
+
+    % ================= CPP =================
+    [N_CPP, N_CPP_int, E_CPP, tau_CPP, ~, ~] = ...
+        compute_CPP_tauDriven( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID, ...
+    cpp_multiplier, fracCPP, base_price);
+
+    % ---- FPM Energy ----
+    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+    P_EV = EV_temp(:,7);
+    timeCol = EV_temp(:,3);
+
+    E_FPM = zeros(size(timeGrid_min));
+    for k = 1:numel(timeGrid_min)
+        idx = find(timeCol==timeGrid_min(k),1);
+        if ~isempty(idx)
+            E_FPM(k) = P_EV(idx)*dt;
+        end
+    end
+
+    P_CPP_kW = E_CPP * 6;
+Revenue_CPP = price_CPP .* E_CPP;
+
+    Tcpp_detail = table( ...
+    timeGrid_min, price_CPP, tau_CPP, ...
+    N_CPP, N_CPP_int, ...
+    E_FPM, E_CPP, P_CPP_kW, Revenue_CPP, ...
+    'VariableNames', ...
+    {'Time_min','Price','tau_h','N_EV_frac','N_EV_int', ...
+     'E_EV_FPM_kWh','E_EV_CPP_kWh','P_EV_CPP_kW','Revenue_Rs'} );
+
+    writetable(Tcpp_detail, CPP_file, ...
+        'Sheet', sprintf('FCS_%d',fcsID));
+
+    % ================= TOU =================
+    [N_TOU, N_TOU_int, E_TOU, tau_TOU, ~, ~] = ...
+        compute_TOU_tauDriven( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, fcsID, ...
+    tou_prices, base_price);
+
+    P_TOU_kW = E_TOU * 6;
+Revenue_TOU = price_TOU .* E_TOU;
+
+    Ttou_detail = table( ...
+    timeGrid_min, price_TOU, tau_TOU, ...
+    N_TOU, N_TOU_int, ...
+    E_FPM, E_TOU, P_TOU_kW, Revenue_TOU, ...
+    'VariableNames', ...
+    {'Time_min','Price','tau_h','N_EV_frac','N_EV_int', ...
+     'E_EV_FPM_kWh','E_EV_TOU_kWh','P_EV_TOU_kW','Revenue_Rs'} );
+
+
+    writetable(Ttou_detail, TOU_file, ...
+        'Sheet', sprintf('FCS_%d',fcsID));
+
+end
+
+fprintf('\nDetailed files generated:\n');
+fprintf('  %s\n',CPP_file);
+fprintf('  %s\n',TOU_file);
