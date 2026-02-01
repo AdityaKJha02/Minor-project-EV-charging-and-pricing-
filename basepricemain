@@ -1,0 +1,73 @@
+clc; clear;
+
+battery_kWh = 1500;
+base_start = 10;
+base_end   = 100;
+step       = 0.1;
+nFCS = 6;
+
+EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+PV_file  = 'PV_Results_6_NPV_10min.xlsx';
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+
+sheetNames_EV = {
+ 'EVFCS_1_6_2'
+ 'EVFCS_2_24_21'
+ 'EVFCS_3_15_22'
+ 'EVFCS_4_13_12'
+ 'EVFCS_5_7_18'
+ 'EVFCS_6_10_15'
+};
+
+sheetNames = {'FCS_1','FCS_2','FCS_3','FCS_4','FCS_5','FCS_6'};
+
+TEMP_BSA_file = 'TEMP_BSA_FPM.xlsx';
+CPP_excel = 'CPP_Detailed_Results_AllFCS.xlsx';
+TOU_excel = 'TOU_Detailed_Results_AllFCS.xlsx';
+PED_excel = 'PED_Detailed_Results_AllFCS.xlsx';
+
+% ---- Safety checks ----
+if ~isfile(TEMP_BSA_file), error('TEMP_BSA_FPM.xlsx missing'); end
+if ~isfile(CPP_excel), error('CPP excel missing'); end
+if ~isfile(TOU_excel), error('TOU excel missing'); end
+if ~isfile(PED_excel), error('PED excel missing'); end
+
+N_co = [13 10 2 10 6 8];
+
+A_fc = zeros(1,length(N_co));
+N_pv = zeros(1,length(N_co));
+
+PV_module_area = 2.6;
+for i=1:length(N_co)
+    A_fc(i) = Area_calc(N_co(i));
+    N_pv(i) = round(0.85*A_fc(i)/PV_module_area);
+end
+
+beta_SS = zeros(1,nFCS);
+for i=1:nFCS
+    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
+    beta_SS(i) = max(EV_temp(:,7));
+end
+
+% ---- Run searches ----
+RES_CPP = find_baseprice_CPP(base_start,base_end,step, ...
+    battery_kWh,N_co,beta_SS,N_pv, ...
+    TEMP_BSA_file,CPP_excel,sheetNames);
+
+RES_TOU = find_baseprice_TOU(base_start,base_end,step, ...
+    battery_kWh,N_co,beta_SS,N_pv, ...
+    TEMP_BSA_file,TOU_excel,sheetNames);
+
+RES_PED = find_baseprice_PED(base_start,base_end,step, ...
+    battery_kWh,N_co,beta_SS,N_pv, ...
+    TEMP_BSA_file,PED_excel,sheetNames);
+
+% ---- Print ----
+fprintf('\nCPP: BasePrice=%.2f PM=%.3f Revenue=%.2f Cost=%.2f\n', ...
+    RES_CPP.base_price,RES_CPP.PM,RES_CPP.Revenue,RES_CPP.Cost);
+
+fprintf('TOU: BasePrice=%.2f PM=%.3f Revenue=%.2f Cost=%.2f\n', ...
+    RES_TOU.base_price,RES_TOU.PM,RES_TOU.Revenue,RES_TOU.Cost);
+
+fprintf('PED: BasePrice=%.2f PM=%.3f Revenue=%.2f Cost=%.2f\n', ...
+    RES_PED.base_price,RES_PED.PM,RES_PED.Revenue,RES_PED.Cost);
