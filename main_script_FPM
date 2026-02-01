@@ -3,7 +3,7 @@ clc; clear; close all;
 %% =========================================================
 % STATION DATA (FIXED FOR ALL CASES)
 % =========================================================
-N_co = [13 10 2 10 6 8];
+N_co = [13 10 2 10 6 8];                    % chargers per FCS
 
 nFCS = numel(N_co);
 
@@ -22,7 +22,7 @@ end
 %% =========================================================
 % BATTERY SIZE SWEEP (Fig. 7)
 % =========================================================
-batterySizes = 50:200:2000;   % kWh
+batterySizes = 500:500:5000;   % kWh
 nB = numel(batterySizes);
 
 FP_vec = zeros(nB,1);
@@ -34,14 +34,7 @@ EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
 PV_file  = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file = 'RTP_grid_cost_10min.xlsx';
 
-sheetNames_EV = {
-    'EVFCS_1_6_2'
-    'EVFCS_2_24_21'
-    'EVFCS_3_15_22'
-    'EVFCS_4_13_12'
-    'EVFCS_5_7_18'
-    'EVFCS_6_10_15'
-};
+sheetNames_EV = { 'EVFCS_1_6_2' 'EVFCS_2_24_21' 'EVFCS_3_15_22' 'EVFCS_4_13_12' 'EVFCS_5_7_18' 'EVFCS_6_10_15' };
 
 sheetNames_PV = {
     'NPV_400'
@@ -64,7 +57,7 @@ end
 % =========================================================
 params.dt          = 1/6;      % 10 minutes
 params.PM_DES      = .25;     % desired profit margin
-params.rho_SELL_0  = .10;      % Rs/kWh
+params.rho_SELL_0  = .1;      % Rs/kWh
 params.rho_SELL_max= 30.0;     % Rs/kWh
 params.delta_rho   = 0.01;      % Rs/kWh step
 
@@ -74,13 +67,13 @@ params.rho_PUR = rtp(1:144,2); % purchasing price (Rs/kWh)
 %% =========================================================
 % MAIN OPTIMIZATION LOOP (Fig. 7 logic)
 % =========================================================
-Battery_vec  = zeros(nB,1);
-FP_out       = zeros(nB,1);
-PM_out       = zeros(nB,1);
-Revenue_out  = zeros(nB,1);
-Cost_out     = zeros(nB,1);
-C_FIX_out    = zeros(nB,1);
-C_OandM_out  = zeros(nB,1);
+Battery_vec   = zeros(nB,1);
+FP_out        = zeros(nB,1);
+PM_out        = zeros(nB,1);
+Revenue_out   = zeros(nB,1);
+Cost_out      = zeros(nB,1);
+C_FIX_out     = zeros(nB,1);
+C_OandM_out   = zeros(nB,1);
 
 for k = 1:nB
 
@@ -120,8 +113,8 @@ params.E_BESS = batterySizes(k);
     FPM = run_FPM_from_BSA_Excel(params, tempExcel);
 
 Battery_vec(k) = batterySizes(k);
-FP_vec(k)      = FPM.rho_SELL;
 
+FP_vec(k)      = FPM.rho_SELL;
 FP_out(k)      = FPM.rho_SELL;
 PM_out(k)      = FPM.PM;
 Revenue_out(k) = FPM.Total_Revenue;
@@ -130,6 +123,9 @@ Cost_out(k)    = FPM.Total_Cost;
 C_FIX_out(k)   = sum(params.C_FIX);
 C_OandM_out(k)= sum(params.C_OandM);
 end
+%% =========================================================
+% SAVE RESULTS TO EXCEL
+% =========================================================
 
 Results_Table = table( ...
     Battery_vec, ...
