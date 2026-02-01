@@ -1,72 +1,76 @@
 clc; clear; close all;
 
 %% =========================================================
-% STATION DATA (FIXED FOR ALL CASES)
-% =========================================================
-N_co = [13 10 2 10 6 8];                    % chargers per FCS
-
+% STATION DATA
+%% =========================================================
+N_co = [13 10 2 10 6 8];
 nFCS = numel(N_co);
 
-PV_module_area = 2.6;     % m^2
-A_fc = zeros(1, length(N_co));
+PV_module_area = 2.6;
+A_fc = zeros(1,nFCS);
 
-for i = 1:length(N_co)
+for i=1:nFCS
     A_fc(i) = Area_calc(N_co(i));
 end
 
-N_pv = zeros(1,length(N_co));
-for i = 1:length(N_co)
-    N_pv(i) = round(0.85 * A_fc(i) / PV_module_area);
-end
+N_pv = round(0.85 .* A_fc ./ PV_module_area);
 
 %% =========================================================
-% BATTERY SIZE SWEEP (Fig. 7)
-% =========================================================
-batterySizes = 500:500:5000;   % kWh
+% BATTERY SIZE SWEEP
+%% =========================================================
+batterySizes = 500:500:5000;     % <-- ONLY THESE VALUES
 nB = numel(batterySizes);
-
-FP_vec = zeros(nB,1);
 
 %% =========================================================
 % FILE INPUTS
-% =========================================================
+%% =========================================================
 EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
 PV_file  = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file = 'RTP_grid_cost_10min.xlsx';
+tempExcel = 'TEMP_BSA_FPM.xlsx';
 
-sheetNames_EV = { 'EVFCS_1_6_2' 'EVFCS_2_24_21' 'EVFCS_3_15_22' 'EVFCS_4_13_12' 'EVFCS_5_7_18' 'EVFCS_6_10_15' };
+sheetNames_EV = {
+'EVFCS_1_6_2'
+'EVFCS_2_24_21'
+'EVFCS_3_15_22'
+'EVFCS_4_13_12'
+'EVFCS_5_7_18'
+'EVFCS_6_10_15'
+};
 
 sheetNames_PV = {
-    'NPV_400'
-    'NPV_390'
-    'NPV_420'
-    'NPV_405'
-    'NPV_397'
-    'NPV_408'};
+'NPV_400'
+'NPV_390'
+'NPV_420'
+'NPV_405'
+'NPV_397'
+'NPV_408'
+};
 
-tempExcel = 'TEMP_BSA_FPM.xlsx';
-beta_SS = zeros(1, nFCS);   % substation capacity (kW)
-
-for i = 1:nFCS
-    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
-    beta_SS(i) = max(EV_temp(:,7));   % column 7 = EV power (kW)
+%% =========================================================
+% SUBSTATION CAPACITY
+%% =========================================================
+beta_SS = zeros(1,nFCS);
+for i=1:nFCS
+    M = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
+    beta_SS(i) = max(M(:,7));
 end
 
 %% =========================================================
-% FPM PARAMETERS (PAPER-DEFINED)
-% =========================================================
-params.dt          = 1/6;      % 10 minutes
-params.PM_DES      = .25;     % desired profit margin
-params.rho_SELL_0  = .1;      % Rs/kWh
-params.rho_SELL_max= 30.0;     % Rs/kWh
-params.delta_rho   = 0.01;      % Rs/kWh step
+% FPM PARAMETERS
+%% =========================================================
+params.dt = 1/6;
+params.PM_DES = 0.25;
+params.rho_SELL_0 = 0.1;
+params.rho_SELL_max = 30;
+params.delta_rho = 0.01;
 
 rtp = readmatrix(RTP_file);
-params.rho_PUR = rtp(1:144,2); % purchasing price (Rs/kWh)
+params.rho_PUR = rtp(1:144,2);
 
 %% =========================================================
-% MAIN OPTIMIZATION LOOP (Fig. 7 logic)
-% =========================================================
+% STORAGE ARRAYS
+%% =========================================================
 Battery_vec   = zeros(nB,1);
 FP_out        = zeros(nB,1);
 PM_out        = zeros(nB,1);
@@ -75,57 +79,50 @@ Cost_out      = zeros(nB,1);
 C_FIX_out     = zeros(nB,1);
 C_OandM_out   = zeros(nB,1);
 
+%% =========================================================
+% MAIN LOOP
+%% =========================================================
 for k = 1:nB
 
-    fprintf('Running BESS size = %d kWh\n', batterySizes(k));
+    fprintf('Running BESS size = %d kWh\n',batterySizes(k));
 
-    % -----------------------------------------------------
-    % FIXED COSTS (paper Eq. 35 + Eq. 31)
-    % -----------------------------------------------------
-    batterySize_vec = batterySizes(k) * ones(1,6);  % OR custom per-FCS sizes
+    batterySize_vec = batterySizes(k)*ones(1,nFCS);
 
-params.C_FIX = Cd_fixcost_FPM( ...
-    batterySize_vec, ...
-    N_co, ...
-    beta_SS, ...
-    N_pv );
-
+    params.C_FIX = Cd_fixcost_FPM( ...
+        batterySize_vec, N_co, beta_SS, N_pv );
 
     params.C_OandM = Cd_OandM_FPM(params.C_FIX);
-       % <<< ADD THIS LINE
-params.E_BESS = batterySizes(k);
+    params.E_BESS = batterySizes(k);
 
-
-    % -----------------------------------------------------
-    % BATTERY SCHEDULING (BSA)
-    % -----------------------------------------------------
+    % ----- BSA -----
     BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
         batterySizes(k));
 
-    % Export BSA results to Excel
-    BSA_step5_generateExcel(BSA, tempExcel);
+    BSA_step5_generateExcel(BSA,tempExcel);
 
-    % -----------------------------------------------------
-    % RUN FPM (Eqs. 23, 25, 33, 34)
-    % -----------------------------------------------------
-    FPM = run_FPM_from_BSA_Excel(params, tempExcel);
+    % ----- FPM -----
+    FPM = run_FPM_from_BSA_Excel(params,tempExcel);
 
-Battery_vec(k) = batterySizes(k);
+    Battery_vec(k)   = batterySizes(k);
+    FP_out(k)        = FPM.rho_SELL;
+    PM_out(k)        = FPM.PM;
+    Revenue_out(k)   = FPM.Total_Revenue;
+    Cost_out(k)      = FPM.Total_Cost;
+    C_FIX_out(k)     = sum(params.C_FIX);
+    C_OandM_out(k)   = sum(params.C_OandM);
 
-FP_vec(k)      = FPM.rho_SELL;
-FP_out(k)      = FPM.rho_SELL;
-PM_out(k)      = FPM.PM;
-Revenue_out(k) = FPM.Total_Revenue;
-Cost_out(k)    = FPM.Total_Cost;
-
-C_FIX_out(k)   = sum(params.C_FIX);
-C_OandM_out(k)= sum(params.C_OandM);
 end
+
 %% =========================================================
-% SAVE RESULTS TO EXCEL
-% =========================================================
+% SAVE RESULTS TO EXCEL (DELETE OLD FILE FIRST)
+%% =========================================================
+outputFile = 'Fig7_FPM_Results.xlsx';
+
+if exist(outputFile,'file')
+    delete(outputFile);
+end
 
 Results_Table = table( ...
     Battery_vec, ...
@@ -144,31 +141,26 @@ Results_Table = table( ...
      'Fixed_Cost_Rs', ...
      'OandM_Cost_Rs'} );
 
-outputFile = 'Fig7_FPM_Results.xlsx';
-writetable(Results_Table, outputFile);
+writetable(Results_Table,outputFile);
 
-disp('------------------------------------------');
-disp('Fig 7 optimization results saved to Excel');
-disp(['File name: ', outputFile]);
-disp('------------------------------------------');
+disp('Excel regenerated cleanly');
 
 %% =========================================================
-% PLOT – FIGURE 7 (PAPER)
-% =========================================================
+% FIGURE 7
+%% =========================================================
 figure;
-plot(batterySizes, FP_vec, '-o', ...
-     'LineWidth', 2, ...
-     'MarkerFaceColor','r');
+plot(Battery_vec,FP_out,'-o','LineWidth',2);
 grid on;
 xlabel('Battery capacity (kWh)');
-ylabel('Flat price FP (₹/kWh)');
+ylabel('Flat price FP (Rs/kWh)');
 title('Optimized size of BESS for proposed FPM');
 
+%% =========================================================
+% PROFIT MARGIN vs FLAT PRICE
+%% =========================================================
 figure;
-plot(FP_out, PM_out, '-s', ...
-     'LineWidth',2, ...
-     'MarkerFaceColor','b');
+plot(FP_out,PM_out,'-s','LineWidth',2);
 grid on;
-xlabel('Flat price FP (₹/kWh)');
+xlabel('Flat price FP (Rs/kWh)');
 ylabel('Profit Margin');
 title('Profit Margin vs Flat Pricing');
