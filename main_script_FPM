@@ -3,7 +3,7 @@ clc; clear; close all;
 %% =========================================================
 % STATION DATA (FIXED FOR ALL CASES)
 % =========================================================
-N_co = [14 11 2 11 7 9];   % chargers per FCS
+N_co = [13 10 2 10 6 8];
 
 nFCS = numel(N_co);
 
@@ -22,7 +22,7 @@ end
 %% =========================================================
 % BATTERY SIZE SWEEP (Fig. 7)
 % =========================================================
-batterySizes = 50:50:2000;   % kWh
+batterySizes = 50:200:2000;   % kWh
 nB = numel(batterySizes);
 
 FP_vec = zeros(nB,1);
@@ -64,9 +64,9 @@ end
 % =========================================================
 params.dt          = 1/6;      % 10 minutes
 params.PM_DES      = .25;     % desired profit margin
-params.rho_SELL_0  = 10.0;      % Rs/kWh
+params.rho_SELL_0  = .10;      % Rs/kWh
 params.rho_SELL_max= 30.0;     % Rs/kWh
-params.delta_rho   = 0.1;      % Rs/kWh step
+params.delta_rho   = 0.01;      % Rs/kWh step
 
 rtp = readmatrix(RTP_file);
 params.rho_PUR = rtp(1:144,2); % purchasing price (Rs/kWh)
@@ -74,6 +74,14 @@ params.rho_PUR = rtp(1:144,2); % purchasing price (Rs/kWh)
 %% =========================================================
 % MAIN OPTIMIZATION LOOP (Fig. 7 logic)
 % =========================================================
+Battery_vec  = zeros(nB,1);
+FP_out       = zeros(nB,1);
+PM_out       = zeros(nB,1);
+Revenue_out  = zeros(nB,1);
+Cost_out     = zeros(nB,1);
+C_FIX_out    = zeros(nB,1);
+C_OandM_out  = zeros(nB,1);
+
 for k = 1:nB
 
     fprintf('Running BESS size = %d kWh\n', batterySizes(k));
@@ -111,8 +119,42 @@ params.E_BESS = batterySizes(k);
     % -----------------------------------------------------
     FPM = run_FPM_from_BSA_Excel(params, tempExcel);
 
-    FP_vec(k) = FPM.rho_SELL;
+Battery_vec(k) = batterySizes(k);
+FP_vec(k)      = FPM.rho_SELL;
+
+FP_out(k)      = FPM.rho_SELL;
+PM_out(k)      = FPM.PM;
+Revenue_out(k) = FPM.Total_Revenue;
+Cost_out(k)    = FPM.Total_Cost;
+
+C_FIX_out(k)   = sum(params.C_FIX);
+C_OandM_out(k)= sum(params.C_OandM);
 end
+
+Results_Table = table( ...
+    Battery_vec, ...
+    FP_out, ...
+    PM_out, ...
+    Revenue_out, ...
+    Cost_out, ...
+    C_FIX_out, ...
+    C_OandM_out, ...
+    'VariableNames', ...
+    {'Battery_kWh', ...
+     'Optimal_FP_Rs_per_kWh', ...
+     'Profit_Margin', ...
+     'Total_Revenue_Rs', ...
+     'Total_Cost_Rs', ...
+     'Fixed_Cost_Rs', ...
+     'OandM_Cost_Rs'} );
+
+outputFile = 'Fig7_FPM_Results.xlsx';
+writetable(Results_Table, outputFile);
+
+disp('------------------------------------------');
+disp('Fig 7 optimization results saved to Excel');
+disp(['File name: ', outputFile]);
+disp('------------------------------------------');
 
 %% =========================================================
 % PLOT – FIGURE 7 (PAPER)
@@ -125,3 +167,12 @@ grid on;
 xlabel('Battery capacity (kWh)');
 ylabel('Flat price FP (₹/kWh)');
 title('Optimized size of BESS for proposed FPM');
+
+figure;
+plot(FP_out, PM_out, '-s', ...
+     'LineWidth',2, ...
+     'MarkerFaceColor','b');
+grid on;
+xlabel('Flat price FP (₹/kWh)');
+ylabel('Profit Margin');
+title('Profit Margin vs Flat Pricing');
