@@ -1,0 +1,67 @@
+function RESULT = find_baseprice_CPP( ...
+        base_start, base_end, step, ...
+        battery_kWh, N_co, beta_SS, N_pv, ...
+        TEMP_BSA_file, CPP_excel, sheetNames)
+
+PM_DES = 0.25;
+
+% ---------- Fixed costs ----------
+battery_vec = battery_kWh * ones(1,length(N_co));
+C_FIX   = sum(Cd_fixcost_FPM(battery_vec, N_co, beta_SS, N_pv));
+C_OandM = sum(Cd_OandM_FPM(C_FIX));
+
+for base_price = base_start:step:base_end
+
+    % ===== Regenerate CPP excel externally before calling this =====
+    % compute_CPP_tauDriven must be called in main script
+
+    Revenue = 0;
+    EnergyCost = 0;
+
+    for i = 1:length(sheetNames)
+
+    % ---- Total revenue from Excel ----
+    TotalRev_i = readmatrix(CPP_excel, ...
+        'Sheet', sheetNames{i}, ...
+        'Range','K2');
+
+    % ---- Net grid energy from BSA ----
+    Mbsa  = readmatrix(TEMP_BSA_file,'Sheet',sheetNames{i});
+    Egrid = Mbsa(:,9);
+    Egrid = Egrid(~isnan(Egrid));
+
+    % ---- Price signal ----
+    Mcpp = readmatrix(CPP_excel,'Sheet',sheetNames{i});
+    price_signal = Mcpp(:,2);
+    price_signal = price_signal(~isnan(price_signal));
+
+    N = min(length(price_signal), length(Egrid));
+    price_signal = price_signal(1:N);
+    Egrid = Egrid(1:N);
+
+    price = price_signal * base_price;
+    EnergyCost = EnergyCost + sum(price .* Egrid);
+
+    Revenue = Revenue + TotalRev_i;
+
+end
+
+
+    Cost = C_FIX + C_OandM + EnergyCost;
+    PM   = (Revenue - Cost) / Revenue;
+
+    if PM >= PM_DES
+        RESULT.base_price = base_price;
+        RESULT.Revenue   = Revenue;
+        RESULT.Cost      = Cost;
+        RESULT.PM        = PM;
+        return;
+    end
+end
+
+RESULT.base_price = NaN;
+RESULT.Revenue = NaN;
+RESULT.Cost = NaN;
+RESULT.PM = NaN;
+
+end
