@@ -60,38 +60,47 @@ for fcsID = 1:nFCS
 end
 
 %% ======================================================
-% STEP 2 & 3 — REVENUE + PDT
+% STEP 2 & 3 — TOTAL REVENUE + PURCHASE COST (CPP)
 %% ======================================================
 TotalRevenue_all = 0;
 EnergyCost_all  = 0;
 
 fprintf('\nSTEP 2–3\n');
 
+% ---- Read purchase price from RTP (column 2) ----
+RTP = readmatrix(RTP_file);
+timeRTP = RTP(:,1);
+rho_PUR = RTP(:,2);      % purchase price Rs/kWh
+
 for i = 1:nFCS
 
     sheet = sprintf('FCS_%d',i);
 
-    Rev_i = readmatrix(CPP_excel,'Sheet',sheet,'Range','K2:K2');
+    %% ---- Revenue from K2 ----
+    Rev_i = readmatrix(CPP_excel,'Sheet',sheet,'Range','K2');
     Rev_i = Rev_i(1);
 
     TotalRevenue_all = TotalRevenue_all + Rev_i;
 
-    Mcpp = readmatrix(CPP_excel,'Sheet',sheet);
-    price_signal = Mcpp(:,1);
-    price_signal = price_signal(~isnan(price_signal));
-
+    %% ---- Grid energy from BSA (column 9) ----
     Mbsa = readmatrix(TEMP_BSA_file,'Sheet',sheet);
     Egrid = Mbsa(:,9);
     Egrid = Egrid(~isnan(Egrid));
 
-    N = min(length(price_signal),length(Egrid));
-    price_signal = price_signal(1:N);
-    Egrid = Egrid(1:N);
+    %% ---- Build purchase price vector aligned to timeGrid ----
+    rho_vec = zeros(length(Egrid),1);
 
-    slotCost = sum(price_signal .* Egrid);
-    EnergyCost_all = EnergyCost_all + slotCost;
+    for k = 1:length(Egrid)
+        idx = find(timeRTP == timeGrid_min(k),1);
+        rho_vec(k) = rho_PUR(idx);
+    end
 
-    fprintf('FCS %d | pdt = %.4f Rs\n',i,slotCost);
+    %% ---- Purchase cost pdt ----
+    pdt = sum(rho_vec .* Egrid);
+    EnergyCost_all = EnergyCost_all + pdt;
+
+    fprintf('FCS %d | Revenue(K2)=%.4f | PurchaseCost=%.4f Rs\n', ...
+            i, Rev_i, pdt);
 end
 
 %% ======================================================
