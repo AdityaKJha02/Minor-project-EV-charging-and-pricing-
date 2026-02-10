@@ -1,0 +1,98 @@
+function [N_EV_DPM, N_EV_int, E_EV_DPM, tau_h, price_h, kappa] = ...
+    compute_PED_DPM_sigmoid( ...
+        timeGrid_min, RTP_file, ...
+        EV_file, sheetNames_EV, fcsID, ...
+        base_price)
+
+% =========================================================
+% PED / DPM with sigmoid price scaling around base_price
+% Price range ≈ [0.7, 1.3] * base_price
+% =========================================================
+
+%% ---------------------------
+% STEP 1: RTP → τ
+% ---------------------------
+M = readmatrix(RTP_file);
+timeRTP = M(:,1);
+rhoSELL = M(:,3);
+
+inv_price = 1 ./ rhoSELL;
+tau_all = inv_price ./ max(inv_price);
+
+nT = numel(timeGrid_min);
+tau_h = zeros(nT,1);
+
+for k = 1:nT
+    idx = find(timeRTP == timeGrid_min(k),1);
+    tau_h(k) = tau_all(idx);
+end
+
+%% ---------------------------
+% STEP 2: Baseline EV arrivals (FPM)
+% ---------------------------
+N_EV_FPM = zeros(nT,1);
+for k = 1:nT
+    N_EV_FPM(k) = getEVcountAtTime( ...
+        EV_file, sheetNames_EV, fcsID, timeGrid_min(k));
+end
+
+%% ---------------------------
+% STEP 3: Sigmoid price multiplier
+% ---------------------------
+m_min = 0.7;      % → ~7 Rs if base=10
+m_max = 1.3;      % → ~13 Rs if base=10
+beta  = 8;        % steepness
+tau0  = 0.5;      % midpoint
+
+multiplier = m_min + ...
+    (m_max - m_min) ./ ...
+    (1 + exp(beta * (tau_h - tau0)));
+
+price_h = base_price .* multiplier;
+
+%% ---------------------------
+% STEP 4: κ (normalization)
+% ---------------------------
+kappa = sum(N_EV_FPM) / sum(tau_h .* N_EV_FPM);
+
+%% ---------------------------
+% STEP 5: DPM EV arrivals
+% ---------------------------
+N_EV_DPM = kappa * tau_h .* N_EV_FPM;
+
+%% ---------------------------
+% STEP 6: Energy calculation
+% ---------------------------
+dt = 1/6;
+EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+P_EV = EV_temp(:,7);
+timeCol = EV_temp(:,3);
+
+E_EV_FPM_h = zeros(nT,1);
+for k = 1:nT
+    idx = find(timeCol == timeGrid_min(k),1);
+    if ~isempty(idx)
+        E_EV_FPM_h(k) = P_EV(idx) * dt;
+    end
+end
+
+if sum(N_EV_FPM) > 0
+    e_bar = sum(E_EV_FPM_h) / sum(N_EV_FPM);
+else
+    e_bar = 0;
+end
+
+E_EV_DPM = N_EV_DPM * e_bar;
+
+%% ---------------------------
+% STEP 7: Integerization
+% ---------------------------
+floorEV = floor(N_EV_DPM);
+residual = N_EV_DPM - floorEV;
+missing = round(sum(N_EV_DPM) - sum(floorEV));
+
+[~,idx] = sort(residual,'descend');
+N_EV_int = floorEV;
+N_EV_int(idx(1:missing)) = N_EV_int(idx(1:missing)) + 1;
+
+end
