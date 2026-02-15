@@ -18,7 +18,7 @@ N_pv = round(0.85 .* A_fc ./ PV_module_area);
 %% =========================================================
 % BATTERY SIZE SWEEP
 %% =========================================================
-batterySizes = 500:500:5000;     % <-- ONLY THESE VALUES
+batterySizes = 1500:200:3000;     % <-- ONLY THESE VALUES
 nB = numel(batterySizes);
 
 %% =========================================================
