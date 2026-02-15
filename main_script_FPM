@@ -18,7 +18,7 @@ N_pv = round(0.85 .* A_fc ./ PV_module_area);
 %% =========================================================
 % BATTERY SIZE SWEEP
 %% =========================================================
-batterySizes = 1500:200:3000;     % <-- ONLY THESE VALUES
+batterySizes = 500:500:2500;     % <-- ONLY THESE VALUES
 nB = numel(batterySizes);
 
 %% =========================================================
@@ -143,6 +143,47 @@ Results_Table = table( ...
 
 writetable(Results_Table,outputFile);
 
+%% =========================================================
+% FIND OPTIMAL (MINIMUM FLAT PRICE)
+%% =========================================================
+
+[FP_min, idx_min] = min(FP_out);
+
+Battery_opt  = Battery_vec(idx_min);
+PM_opt       = PM_out(idx_min);
+Revenue_opt  = Revenue_out(idx_min);
+Cost_opt     = Cost_out(idx_min);
+Cfix_opt     = C_FIX_out(idx_min);
+COandM_opt   = C_OandM_out(idx_min);
+
+fprintf('\n============================================\n');
+fprintf('OPTIMAL BESS SIZE FOUND\n');
+fprintf('============================================\n');
+fprintf('Optimal Battery Size     : %d kWh\n', Battery_opt);
+fprintf('Minimum Flat Price       : %.4f Rs/kWh\n', FP_min);
+fprintf('Profit Margin            : %.4f\n', PM_opt);
+fprintf('Total Revenue            : %.2f Rs\n', Revenue_opt);
+fprintf('Total Cost               : %.2f Rs\n', Cost_opt);
+fprintf('Fixed Cost               : %.2f Rs\n', Cfix_opt);
+fprintf('O&M Cost                 : %.2f Rs\n', COandM_opt);
+fprintf('============================================\n');
+
+% ---- Leave 1 row gap in Excel ----
+gapRow = height(Results_Table) + 3;
+
+OptimalSummary = {
+    'Optimal Battery (kWh)', Battery_opt;
+    'Minimum Flat Price (Rs/kWh)', FP_min;
+    'Profit Margin', PM_opt;
+    'Total Revenue (Rs)', Revenue_opt;
+    'Total Cost (Rs)', Cost_opt;
+    'Fixed Cost (Rs)', Cfix_opt;
+    'O&M Cost (Rs)', COandM_opt
+};
+
+writecell(OptimalSummary, outputFile, ...
+    'Range', sprintf('A%d', gapRow));
+
 disp('Excel regenerated cleanly');
 
 %% =========================================================
@@ -164,3 +205,51 @@ grid on;
 xlabel('Flat price FP (Rs/kWh)');
 ylabel('Profit Margin');
 title('Profit Margin vs Flat Pricing');
+
+
+%% =========================================================
+% FIGURE 7 – SAVEABLE BESS OPTIMIZATION PLOT
+%% =========================================================
+
+% Detect minimum
+[FP_min, idx_min] = min(FP_out);
+Battery_opt = Battery_vec(idx_min);
+
+% Create figure
+figure('Color','w');
+plot(Battery_vec, FP_out, '-o', ...
+    'LineWidth', 2, ...
+    'MarkerSize', 8);
+hold on;
+
+% Mark optimal point
+plot(Battery_opt, FP_min, 'ro', ...
+    'MarkerSize', 10, ...
+    'LineWidth', 2);
+
+grid on;
+xlabel('Battery capacity (kWh)','FontSize',12);
+ylabel('Flat price FP (Rs/kWh)','FontSize',12);
+title('Optimized size of BESS for proposed FPM','FontSize',13);
+
+legend('Flat Price Curve','Optimal BESS','Location','best');
+
+% Add annotation text
+text(Battery_opt, FP_min, ...
+    sprintf('  Optimal = %d kWh', Battery_opt), ...
+    'FontSize',11, ...
+    'VerticalAlignment','bottom');
+
+%% =========================================================
+% SAVE OUTPUT FILES
+%% =========================================================
+
+% Save as high-resolution PNG
+exportgraphics(gcf, 'BESS_Optimization_Fig7.png', 'Resolution', 300);
+
+% Save as PDF (publication quality)
+exportgraphics(gcf, 'BESS_Optimization_Fig7.pdf', 'ContentType','vector');
+
+disp('BESS plot saved as:');
+disp(' - BESS_Optimization_Fig7.png');
+disp(' - BESS_Optimization_Fig7.pdf');
