@@ -11,13 +11,13 @@ fprintf('========================================\n');
 % USER SETTINGS
 %% ======================================================
 
-base_start = 10;      % Rs/kWh
+base_start = 9.6;      % Rs/kWh
 base_end   = 50;     % Rs/kWh
 step       = .1;      % Rs/kWh
 
 PM_DES = 0.25;       % desired profit margin
 
-battery_kWh = 1500;
+battery_kWh = 1600;
 
 timeGrid_min = (0:10:1430)';
 
