@@ -159,17 +159,21 @@ energy_req_kWh = (deltaSOC_pct/100) * battery_kWh;
                            % PORT ASSIGNMENT: check stationPortNextFree times
                            ports = stationPortNextFree{stationIdx};
                            % earliest port that is free at or before arrival
-                           freeIdx = find(ports <= arrival_min, 1);
+                           % Find all free ports at arrival time
+freePorts = find(ports <= arrival_min);
 
-if ~isempty(freeIdx)
-    portUsed = freeIdx;          % ✅ STORE PORT NUMBER
+if ~isempty(freePorts)
+    % Always choose smallest numbered free port
+    portUsed = min(freePorts);
     wait_min = 0;
     start_min = arrival_min;
 else
-    [nextFreeTime, portUsed] = min(ports);   % ✅ STORE PORT NUMBER
+    % All ports busy → choose port that becomes free earliest
+    [nextFreeTime, portUsed] = min(ports);
     wait_min = nextFreeTime - arrival_min;
     start_min = nextFreeTime;
 end
+
 
 depart_min_event = start_min + chargeTime_min;
 ports(portUsed) = depart_min_event;
@@ -251,6 +255,53 @@ EVevents = cell2table(rows, 'VariableNames', ...
 % ---------------------------------------------------------
 EVevents.energy_kWh = ...
     (EVevents.soc_after - EVevents.soc_before) .* battery_kWh / 100;
+% =========================================================
+% FIX PORT ASSIGNMENT (CHRONOLOGICAL BY ARRIVAL TIME)
+% =========================================================
+
+for s = 1:K
+
+    idx = find(EVevents.stationIdx == s);
+
+    if isempty(idx)
+        continue;
+    end
+
+    Ts = EVevents(idx,:);
+
+    % Sort by arrival time
+    Ts = sortrows(Ts,'arrival_min');
+
+    portNextFree = zeros(portsPerStation(s),1);
+
+    for r = 1:height(Ts)
+
+        arrival = Ts.arrival_min(r);
+
+        freePorts = find(portNextFree <= arrival);
+
+        if ~isempty(freePorts)
+            portUsed = min(freePorts);   % always smallest port
+            startTime = arrival;
+        else
+            [nextFree, portUsed] = min(portNextFree);
+            startTime = nextFree;
+        end
+
+        departTime = startTime + Ts.charge_min(r);
+
+        portNextFree(portUsed) = departTime;
+
+        Ts.port(r) = portUsed;
+        Ts.start_min(r) = startTime;
+        Ts.wait_min(r) = startTime - arrival;
+        Ts.depart_event_min(r) = departTime;
+    end
+
+    % Write back to main table
+    EVevents(idx,:) = Ts;
+
+end
 
 % =========================================================
 % WRITE EXCEL FILE (ONE SHEET PER EVFCS)
