@@ -1,3 +1,4 @@
+
 clc;
 clear;
 
@@ -9,12 +10,12 @@ markup_factor=0.30
 EVH_filename='EVFCS_10min_Arrival_Power'
 
 filename  = 'RTP_grid_cost_10min.xlsx';
-sheetName1 = 'EVFCS_1_6_8';              % Sheet index or name
-sheetName2 = 'EVFCS_2_12_13';
-sheetName3 = 'EVFCS_3_21_20';
-sheetName4 = 'EVFCS_4_6_5';
-sheetName5 = 'EVFCS_5_6_2';
-sheetName6 = 'EVFCS_6_11_12';
+sheetName1 = 'EVFCS_1_6_2';              % Sheet index or name
+sheetName2 = 'EVFCS_2_24_21';
+sheetName3 = 'EVFCS_3_15_22';
+sheetName4 = 'EVFCS_4_13_12';
+sheetName5 = 'EVFCS_5_7_18';
+sheetName6 = 'EVFCS_6_10_15';
 
 rtpRange='B2:B151';
 EhevRange  = 'H2:H151';       % RTP values (24 hours)
@@ -52,8 +53,38 @@ n = 15;        % Loan duration (years)
 % =====================================================
 % BCS DATA (6 STATIONS)
 % =====================================================
-N_co = [5, 2, 1, 1, 1, 2];                 % No. of chargers
-beta_SS = [424.8, 283.2, 177, 106.2, 212.4, 150];  % Peak load (kW)
+N_co = [8 5 2 5 4 5];                 % No. of chargers
+EVH_filename = 'EVFCS_10min_Arrival_Power.xlsx';
+
+sheetNames = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+nFCS = numel(sheetNames);
+beta_SS = zeros(1,nFCS);
+
+for i = 1:nFCS
+    
+    % Read full sheet
+    M = readmatrix(EVH_filename, 'Sheet', sheetNames{i});
+    
+    % Column G = 7th column
+    colG = M(:,7);
+    
+    % Remove NaNs
+    colG = colG(~isnan(colG));
+    
+    % Take maximum
+    beta_SS(i) = max(colG);
+    
+    fprintf('FCS %d | beta_SS = %.2f kW\n', i, beta_SS(i));
+    
+end
 
 % Area calculation
 A_fc = zeros(1, length(N_co));
@@ -182,4 +213,3 @@ disp('Excel file generated successfully!');
 disp(['File name: ', outputFile]);
 disp('Sheets: EVFCS_1 to EVFCS_6');
 disp('--------------------------------------------------');
-
