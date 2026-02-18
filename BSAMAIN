@@ -1,0 +1,163 @@
+clc; clear; close all;
+
+%% =========================================================
+% INPUT FILES
+% =========================================================
+EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+PV_file  = 'PV_Results_6_NPV_10min.xlsx';
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+
+%% =========================================================
+% SHEET NAMES (ONE PER FCS)
+% =========================================================
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+sheetNames_PV = { ...
+    'NPV_400', ...
+    'NPV_390', ...
+    'NPV_420', ...
+    'NPV_405', ...
+    'NPV_397', ...
+    'NPV_408' };
+
+%% =========================================================
+% RUN BATTERY SCHEDULING ALGORITHM (BSA)
+% =========================================================
+batterySize = 1600;  % kWh
+
+BSA = BSA_step1_step2( ...
+        EV_file, PV_file, RTP_file, ...
+        sheetNames_EV, sheetNames_PV, ...
+        batterySize);
+
+disp('✔ Battery Scheduling Algorithm executed successfully');
+
+%% =========================================================
+% BASIC PARAMETERS
+% =========================================================
+dt     = 1/6;          % 10 min
+Nslots = 144;
+nFCS   = numel(BSA.P_EV);
+time_h = (0:Nslots-1) * dt;
+
+%% =========================================================
+% VERIFICATION: MUTUAL EXCLUSIVITY
+% =========================================================
+fprintf('\nChecking charging/discharging exclusivity...\n');
+for i = 1:nFCS
+    idx = find(BSA.P_BC{i} > 0 & BSA.P_BD{i} > 0);
+    if isempty(idx)
+        fprintf('FCS %d: OK\n', i);
+    else
+        error('FCS %d violates exclusivity!', i);
+    end
+end
+
+%% =========================================================
+% COMPUTE FINAL GRID POWER (Eq. 44)
+% P_grid = P_EV - P_PV + P_BC - P_BD
+% =========================================================
+P_grid = cell(1,nFCS);
+E_grid_day = zeros(1,nFCS);
+
+for i = 1:nFCS
+    P_grid{i} = ...
+        BSA.P_EV{i} ...
+      - BSA.P_PV_avg{i} ...
+      + BSA.P_BC{i} ...
+      - BSA.P_BD{i};
+
+    E_grid_day(i) = sum(P_grid{i}) * dt;
+end
+for i = 1:nFCS
+    
+    P_grid{i} = ...
+        BSA.P_EV{i} ...
+      - BSA.P_PV_avg{i} ...
+      + BSA.P_BC{i} ...
+      - BSA.P_BD{i};
+
+    fprintf('\nFCS %d diagnostics:\n', i);
+    fprintf('NaN in P_EV: %d\n', any(isnan(BSA.P_EV{i})));
+    fprintf('NaN in P_PV: %d\n', any(isnan(BSA.P_PV_avg{i})));
+    fprintf('NaN in P_BC: %d\n', any(isnan(BSA.P_BC{i})));
+    fprintf('NaN in P_BD: %d\n', any(isnan(BSA.P_BD{i})));
+
+    fprintf('NaN in P_grid: %d\n', any(isnan(P_grid{i})));
+
+    E_grid_day(i) = sum(P_grid{i}, 'omitnan') * dt;  % temporary safe sum
+end
+for i = 1:nFCS
+    
+    nanIdx = find(isnan(BSA.P_EV{i}));
+    
+    if ~isempty(nanIdx)
+        fprintf('\nFCS %d NaN index in P_EV:\n', i);
+        disp(nanIdx);
+    end
+end
+EV_temp = readmatrix(EV_file, ...
+                     'Sheet', sheetNames_EV{i}, ...
+                     'NumHeaderLines', 1);
+
+P_EV{i} = EV_temp(1:Nslots,7);
+
+
+%% =========================================================
+% VISUALIZATION (ONE FCS EXAMPLE)
+% =========================================================
+i =1;   % choose FCS to plot
+
+figure('Color','w','Name','BSA Results');
+
+subplot(4,1,1)
+plot(time_h, BSA.P_EV{i}, 'k','LineWidth',1.2); hold on
+plot(time_h, BSA.P_PV_avg{i}, 'g','LineWidth',1.2)
+yline(BSA.P_CD(i),'r--','LineWidth',1.2)
+ylabel('Power (kW)')
+title(['FCS ',num2str(i),' : EV Load & PV'])
+legend('EV Load','PV','Contract Demand')
+
+subplot(4,1,2)
+stairs(time_h, BSA.P_BC{i}, 'b','LineWidth',1.2); hold on
+stairs(time_h, BSA.P_BD{i}, 'r','LineWidth',1.2)
+ylabel('Battery Power (kW)')
+legend('Charging','Discharging')
+title('Battery Operation')
+
+subplot(4,1,3)
+plot(time_h, BSA.SOC{i}(1:end-1), 'm','LineWidth',1.2)
+ylim([BSA.SOC_min-5 BSA.SOC_max+5])
+ylabel('SOC (%)')
+title('Battery SOC')
+
+subplot(4,1,4)
+plot(time_h, P_grid{i}, 'k','LineWidth',1.2)
+ylabel('Grid Power (kW)')
+xlabel('Time (hours)')
+title('Net Grid Power')
+
+%% =========================================================
+% DISPLAY DAILY ENERGY SUMMARY
+% =========================================================
+disp('Daily Grid Energy (kWh) per FCS:')
+disp(E_grid_day)
+
+% -----------------------------------------
+% STEP 5: Power, energy & Excel
+% -----------------------------------------
+outputExcel = 'BSA_Results_10min.xlsx';
+
+BSA = BSA_step5_generateExcel(BSA, outputExcel);
+
+fprintf('✔ STEP-5 completed successfully\n');
+
+
+
