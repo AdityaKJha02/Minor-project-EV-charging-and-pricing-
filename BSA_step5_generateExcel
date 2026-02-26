@@ -10,7 +10,7 @@ Nslots = numel(BSA.P_EV{1});
 
 time_min = (0:10:1430)';
 time_hr  = time_min / 60;
-
+eta_EV = BSA.eta_EV;
 % -----------------------------------------
 % Allocate
 % -----------------------------------------
@@ -26,7 +26,7 @@ for i = 1:nFCS
 
     % Eq. (44): Final grid demand
     BSA.P_FCS{i} = ...
-        BSA.P_EV{i} ...
+        (BSA.P_EV{i}/eta_EV) ...
       - BSA.P_PV_avg{i} ...
       + BSA.P_BC{i} ...
       - BSA.P_BD{i};
@@ -74,7 +74,7 @@ for i = 1:nFCS
 
     % ---- Summary ----
     summary = {
-        'EV_Energy_kWh',     dt*sum(BSA.P_EV{i});
+        'EV_Energy_kWh',     dt*sum(BSA.P_EV{i}/eta_EV);
         'PV_Energy_kWh',     dt*sum(BSA.P_PV_avg{i});
         'Battery_Charge_kWh',dt*sum(BSA.P_BC{i});
         'Battery_Discharge_kWh',dt*sum(BSA.P_BD{i});
