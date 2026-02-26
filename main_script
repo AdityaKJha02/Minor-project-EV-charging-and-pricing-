@@ -7,7 +7,6 @@ rng(70);   % fixed seed for reproducibility
 M = readmatrix('distance_matrix.xlsx');
 M(M==0) = Inf;
 M(1:size(M,1)+1:end) = 0;
-
 [dist, nextHop] = floydWarshallNextHop(M);
 
 %% =========================================================
@@ -162,8 +161,7 @@ speed_kmh = 60;
 kmPerUnit = 2;
 %}
 
-portsPerStation =  [13 10 2 10 6 8];
-
+portsPerStation =  [8 5 2 5 4 5];
 
 %% =========================================================
 %% 10. COMPUTE REQUIRED NUMBER OF CHARGING PORTS
@@ -190,7 +188,7 @@ end
 % ================= EV TIMELINE PARAMETERS =================
 kmPerUnit      = 2;        % km per distance unit
 speed_kmh      = 60;       % EV speed
-chargerPower_kW = 180;      % DC fast charger power
+chargerPower_kW = 75;      % DC fast charger power
 
 % ports per station (same order as chosenEdges)
 % =========================================================
@@ -207,11 +205,79 @@ chargerPower_kW = 180;      % DC fast charger power
     battery_kWh, chargerPower_kW, portsPerStation);
 
 %% =========================================================
+%% APPROXIMATE EV ARRIVALS PER STATION (TRAFFIC-BASED)
+%% =========================================================
+
+fprintf('\n============================================\n');
+fprintf('APPROXIMATE EV ARRIVAL ANALYSIS\n');
+fprintf('============================================\n');
+
+numStations = size(chosenEdges,1);
+numOD       = size(OD,1);
+
+% 1️⃣ Total EVs generated in whole network per day
+totalEVs_day = sum(numEVs_hourly) * numOD;
+
+fprintf('Total EVs generated in network per day = %d\n', totalEVs_day);
+
+% 2️⃣ Count how many OD paths include each station edge
+ODcount_per_station = zeros(numStations,1);
+
+for s = 1:numStations
+
+    u = chosenEdges(s,1);
+    v = chosenEdges(s,2);
+
+    for i = 1:numOD
+
+        p = taskPaths{i};
+        if isempty(p), continue; end
+
+        edges = [p(1:end-1)' p(2:end)'];
+
+        if any(ismember(edges,[u v],'rows')) || ...
+           any(ismember(edges,[v u],'rows'))
+
+            ODcount_per_station(s) = ...
+                ODcount_per_station(s) + 1;
+        end
+    end
+end
+
+% 3️⃣ Approx EV arrivals per station per day
+EVarrivals_perStation = ...
+    ODcount_per_station * sum(numEVs_hourly);
+
+% 4️⃣ Actual EVs that charged (from simulation)
+actualCharged_perStation = zeros(numStations,1);
+
+for s = 1:numStations
+    actualCharged_perStation(s) = ...
+        numel(unique(EVevents.evID(EVevents.stationIdx==s)));
+end
+
+% 5️⃣ Display comparison
+fprintf('\nStation Comparison:\n');
+fprintf('------------------------------------------------------------\n');
+fprintf('Station | OD_paths | Approx_Arrivals | Actual_Charged\n');
+fprintf('------------------------------------------------------------\n');
+
+for s = 1:numStations
+    fprintf('%7d | %8d | %15d | %14d\n', ...
+        s, ...
+        ODcount_per_station(s), ...
+        EVarrivals_perStation(s), ...
+        actualCharged_perStation(s));
+end
+
+fprintf('------------------------------------------------------------\n');
+%% =========================================================
 %% 12. EVFCS POWER TIMELINE
 %% =========================================================
 
 generateEVFCSArrivalAndPowerTimeline_10min( ...
     EVevents, chosenEdges, portsPerStation, battery_kWh);
+
 %% =========================================================
 %% 12(b) Complete data
 %% =========================================================
@@ -279,15 +345,31 @@ sheetNames_PV = { ...
     'NPV_397', ...
     'NPV_408' };
 
+socPts = [20 50 75 85 95 100];     % % 66.375, 68.09, 50.57, 35.4, 12.64
+
+% --- Adjusted time points to keep P < 70 kW for battery_kWh = 59 ---
+tPts = [ ...
+    0, ...                         % 20%
+    16, ...                        % 50%  (was 10)
+    29, ...                        % 75%  (was 15)
+    36, ...                        % 85%
+    46, ...                        % 95%
+    60];                           % 100%
+
 %% =========================================================
 % RUN BATTERY SCHEDULING ALGORITHM (BSA)
 % =========================================================
-batterySize = 500;  % kWh
+batterySize = 1600;  % kWh
+% =========================================================
+% USER INPUT PARAMETERS
+% =========================================================
 
+SOC_init_vec = [50 55 70 55 60 60];   % one value per FCS
+CD_factor_vec = [1.44 1.58 3.13 1.49 1.67 1.61];
 BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
-        batterySize);
+        batterySize, SOC_init_vec, CD_factor_vec);
 
 disp('✔ Battery Scheduling Algorithm executed successfully');
 
@@ -320,22 +402,41 @@ P_grid = cell(1,nFCS);
 E_grid_day = zeros(1,nFCS);
 
 for i = 1:nFCS
-    P_grid{i} = ...
-        BSA.P_EV{i} ...
-      - BSA.P_PV_avg{i} ...
-      + BSA.P_BC{i} ...
-      - BSA.P_BD{i};
+    eta_EV = BSA.eta_EV;
+P_grid{i} = ...
+    (BSA.P_EV{i}/eta_EV) ...
+  - BSA.P_PV_avg{i} ...
+  + BSA.P_BC{i} ...
+  - BSA.P_BD{i};
 
     E_grid_day(i) = sum(P_grid{i}) * dt;
 end
+
+
+
+for i = 1:nFCS
+    
+    nanIdx = find(isnan(BSA.P_EV{i}));
+    
+    if ~isempty(nanIdx)
+        fprintf('\nFCS %d NaN index in P_EV:\n', i);
+        disp(nanIdx);
+    end
+end
+EV_temp = readmatrix(EV_file, ...
+                     'Sheet', sheetNames_EV{i}, ...
+                     'NumHeaderLines', 1);
+
+P_EV{i} = EV_temp(1:Nslots,7);
+
 
 %% =========================================================
 % VISUALIZATION (ONE FCS EXAMPLE)
 % =========================================================
 i =1;   % choose FCS to plot
 
-figure('Color','w','Name','BSA Results');
-
+figure(1); clf;
+set(gcf,'Color','w','Name','BSA Results');
 subplot(4,1,1)
 plot(time_h, BSA.P_EV{i}, 'k','LineWidth',1.2); hold on
 plot(time_h, BSA.P_PV_avg{i}, 'g','LineWidth',1.2)
@@ -364,13 +465,31 @@ xlabel('Time (hours)')
 title('Net Grid Power')
 
 %% =========================================================
+% BATTERY SOC OF ALL 6 STATIONS (NEW FIGURE)
+% =========================================================
+
+figure(2); clf;
+set(gcf,'Color','w','Name','Battery SOC - All FCS');
+for i = 1:nFCS
+    
+    subplot(nFCS,1,i)
+    plot(time_h, BSA.SOC{i}(1:end-1), 'm','LineWidth',1.2)
+    
+    ylim([BSA.SOC_min-5 BSA.SOC_max+5])
+    ylabel('SOC (%)')
+    title(['Battery SOC - FCS ', num2str(i)])
+    grid on
+    
+    if i == nFCS
+        xlabel('Time (hours)')
+    end
+
+end
+%% =========================================================
 % DISPLAY DAILY ENERGY SUMMARY
 % =========================================================
 disp('Daily Grid Energy (kWh) per FCS:')
 disp(E_grid_day)
-
-
-
 
 % -----------------------------------------
 % STEP 5: Power, energy & Excel
@@ -383,137 +502,281 @@ fprintf('✔ STEP-5 completed successfully\n');
 
 
 
-
-
 %% =========================================================
-%% 15. FPM ALGORITHM
-%% =========================================================
-
-%% =========================================================
-% STATION DATA (FIXED FOR ALL CASES)
+% SLOT-WISE VERIFICATION (MANUAL CHECK)
 % =========================================================
-N_co    =  [13 10 2 10 6 8];                      % chargers per FCS
 
+fcsID = 1;     % choose station
+slotID = 5;   % choose slot (1–144)
+
+fprintf('\n============================================\n');
+fprintf('DEBUG CHECK → FCS %d | SLOT %d\n', fcsID, slotID);
+fprintf('============================================\n');
+
+Pev  = BSA.P_EV{fcsID}(slotID);
+Ppv  = BSA.P_PV_avg{fcsID}(slotID);
+Pbc  = BSA.P_BC{fcsID}(slotID);
+Pbd  = BSA.P_BD{fcsID}(slotID);
+SOC_now  = BSA.SOC{fcsID}(slotID);
+SOC_next = BSA.SOC{fcsID}(slotID+1);
+eta_EV = BSA.eta_EV;
+
+Pgrid_manual = (Pev/eta_EV) - Ppv + Pbc - Pbd;
+Pgrid_code   = P_grid{fcsID}(slotID);
+
+fprintf('P_EV      = %.4f kW\n', Pev);
+fprintf('P_PV      = %.4f kW\n', Ppv);
+fprintf('P_BC      = %.4f kW\n', Pbc);
+fprintf('P_BD      = %.4f kW\n', Pbd);
+
+fprintf('\nGrid Power (manual) = %.4f kW\n', Pgrid_manual);
+fprintf('Grid Power (code)   = %.4f kW\n', Pgrid_code);
+
+fprintf('\nSOC_now   = %.4f %%\n', SOC_now);
+fprintf('SOC_next  = %.4f %%\n', SOC_next);
+
+dSOC_actual = SOC_next - SOC_now;
+fprintf('SOC change = %.4f %%\n', dSOC_actual);
+
+%% =========================================================
+% SOC FIRST & LAST SLOT CHECK
+% =========================================================
+
+fprintf('\n============================================\n');
+fprintf('SOC START, END & MAX OF DAY\n');
+fprintf('============================================\n');
+
+for i = 1:nFCS
+
+    SOC_start = BSA.SOC{i}(1);
+    SOC_end   = BSA.SOC{i}(end);
+    SOC_max_day = max(BSA.SOC{i});
+    SOC_min_day = min(BSA.SOC{i});   % optional but useful
+
+    fprintf(['FCS %d → SOC_start = %.2f %% | SOC_end = %.2f %% | ', ...
+             'SOC_max = %.2f %% | SOC_min = %.2f %%\n'], ...
+             i, SOC_start, SOC_end, SOC_max_day, SOC_min_day);
+end
+
+
+%% =========================================================
+%% 15. FPM ALGORITHM – COMPLETE MAIN SCRIPT
+%% =========================================================
+
+%% =========================================================
+% STATION DATA
+%% =========================================================
+N_co = [8 5 2 5 4 5];          % chargers per FCS
 nFCS = numel(N_co);
 
-PV_module_area = 2.6;     % m^2
-A_fc = zeros(1, length(N_co));
+PV_module_area = 2.6;          % m^2
 
-for i = 1:length(N_co)
+A_fc = zeros(1,nFCS);
+for i = 1:nFCS
     A_fc(i) = Area_calc(N_co(i));
 end
 
-N_pv = zeros(1,length(N_co));
-for i = 1:length(N_co)
-    N_pv(i) = round(0.85 * A_fc(i) / PV_module_area);
-end
+N_pv = round(0.85 .* A_fc ./ PV_module_area);
 
 %% =========================================================
-% BATTERY SIZE SWEEP (Fig. 7)
-% =========================================================
-batterySizes = 50:250:3000;   % kWh
+% BATTERY SIZE SWEEP
+%% =========================================================
+batterySizes = 500:200:6000;   % kWh
 nB = numel(batterySizes);
 
-FP_vec = zeros(nB,1);
+FP_vec        = zeros(nB,1);
+FixedCost_vec = zeros(nB,1);
+VarCost_vec   = zeros(nB,1);
+TotalCost_vec = zeros(nB,1);
+Revenue_vec   = zeros(nB,1);
+PM_vec        = zeros(nB,1);
 
 %% =========================================================
 % FILE INPUTS
-% =========================================================
+%% =========================================================
 EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
 PV_file  = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file = 'RTP_grid_cost_10min.xlsx';
+tempExcel = 'TEMP_BSA_FPM.xlsx';
 
 sheetNames_EV = {
-    'EVFCS_1_6_2'
-    'EVFCS_2_24_21'
-    'EVFCS_3_15_22'
-    'EVFCS_4_13_12'
-    'EVFCS_5_7_18'
-    'EVFCS_6_10_15'
+   'EVFCS_1_6_2'
+   'EVFCS_2_24_21'
+   'EVFCS_3_15_22'
+   'EVFCS_4_13_12'
+   'EVFCS_5_7_18'
+   'EVFCS_6_10_15'
 };
 
 sheetNames_PV = {
-    'NPV_400'
-    'NPV_390'
-    'NPV_420'
-    'NPV_405'
-    'NPV_397'
-    'NPV_408'};
+   'NPV_400'
+   'NPV_390'
+   'NPV_420'
+   'NPV_405'
+   'NPV_397'
+   'NPV_408'
+};
 
-tempExcel = 'TEMP_BSA_FPM.xlsx';
-beta_SS = zeros(1, nFCS);   % substation capacity (kW)
+%% =========================================================
+% SUBSTATION CAPACITY
+%% =========================================================
+beta_SS = zeros(1,nFCS);
 
 for i = 1:nFCS
-    EV_temp = readmatrix(EV_file, 'Sheet', sheetNames_EV{i});
-    beta_SS(i) = max(EV_temp(:,7));   % column 7 = EV power (kW)
+    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
+    beta_SS(i) = max(EV_temp(:,7));   % EV power column
 end
 
 %% =========================================================
-% FPM PARAMETERS (PAPER-DEFINED)
-% =========================================================
-params.dt          = 1/6;      % 10 minutes
-params.PM_DES      = .25;     % desired profit margin
-params.rho_SELL_0  = 10.0;      % Rs/kWh
-params.rho_SELL_max= 20.0;     % Rs/kWh
-params.delta_rho   = 0.1;      % Rs/kWh step
+% FPM PARAMETERS
+%% =========================================================
+params.dt           = 1/6;        % 10 min
+params.PM_DES       = 0.25;       % desired profit margin
+params.rho_SELL_0   = 0.1;        % starting flat price
+params.rho_SELL_max = 30;         % max search limit
+params.delta_rho    = 0.01;       % search step
 
 rtp = readmatrix(RTP_file);
-params.rho_PUR = rtp(1:144,2); % purchasing price (Rs/kWh)
+params.rho_PUR = rtp(1:144,2);    % purchase price
 
-%% ===================================x======================
-% MAIN OPTIMIZATION LOOP (Fig. 7 logic)
-% =========================================================
+%% =========================================================
+% MAIN LOOP
+%% =========================================================
 for k = 1:nB
 
-    fprintf('Running BESS size = %d kWh\n', batterySizes(k));
+    fprintf('\nRunning BESS size = %d kWh\n', batterySizes(k));
 
-    % -----------------------------------------------------
-    % FIXED COSTS (paper Eq. 35 + Eq. 31)
-    % -----------------------------------------------------
-    batterySize_vec = batterySizes(k) * ones(1,6);  % OR custom per-FCS sizes
+    battery_vec = batterySizes(k) * ones(1,nFCS);
 
-params.C_FIX = Cd_fixcost_FPM( ...
-    batterySize_vec, ...
-    N_co, ...
-    beta_SS, ...
-    N_pv );
+    % ------------------------------
+    % Fixed Cost (Eq. 35)
+    % ------------------------------
+    C_FIX_vec = Cd_fixcost_FPM(battery_vec, N_co, beta_SS, N_pv);
+    C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
 
+    params.C_FIX   = C_FIX_vec;
+    params.C_OandM = C_OandM_vec;
+    params.E_BESS  = batterySizes(k);
 
-    params.C_OandM = Cd_OandM_FPM(params.C_FIX);
-       % <<< ADD THIS LINE
-params.E_BESS = batterySizes(k);
-
-
-    % -----------------------------------------------------
-    % BATTERY SCHEDULING (BSA)
-    % -----------------------------------------------------
+    % ------------------------------
+    % BSA (Battery Scheduling)
+    % ------------------------------
     BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
         batterySizes(k));
 
-    % Export BSA results to Excel
+    % TEMP_BSA_FPM.xlsx generated HERE
     BSA_step5_generateExcel(BSA, tempExcel);
 
-    % -----------------------------------------------------
-    % RUN FPM (Eqs. 23, 25, 33, 34)
-    % -----------------------------------------------------
+    % ------------------------------
+    % Run FPM pricing search
+    % ------------------------------
     FPM = run_FPM_from_BSA_Excel(params, tempExcel);
 
-    FP_vec(k) = FPM.rho_SELL;
+    % ------------------------------
+    % Store outputs
+    % ------------------------------
+    FP_vec(k)        = FPM.rho_SELL;
+    Revenue_vec(k)   = FPM.Total_Revenue;
+    TotalCost_vec(k) = FPM.Total_Cost;
+    PM_vec(k)        = FPM.PM;
+
+    FixedCost_vec(k) = sum(C_FIX_vec) + sum(C_OandM_vec);
+    VarCost_vec(k)   = FPM.Total_Cost - FixedCost_vec(k);
+
 end
 
 %% =========================================================
-% PLOT – FIGURE 7 (PAPER)
-% =========================================================
+% SAVE RESULTS
+%% =========================================================
+outputFile = 'FPM_BESS_Results.xlsx';
+
+if exist(outputFile,'file')
+    delete(outputFile);
+end
+
+T = table( ...
+    batterySizes', ...
+    FP_vec, ...
+    Revenue_vec, ...
+    FixedCost_vec, ...
+    VarCost_vec, ...
+    TotalCost_vec, ...
+    PM_vec, ...
+    'VariableNames', ...
+    {'Battery_kWh', ...
+     'FlatPrice_Rs_per_kWh', ...
+     'Revenue_Rs', ...
+     'FixedCost_Rs', ...
+     'VariableCost_Rs', ...
+     'TotalCost_Rs', ...
+     'ProfitMargin'} );
+
+writetable(T, outputFile);
+
+disp('Excel file generated: FPM_BESS_Results.xlsx');
+
+%% =========================================================
+% FIGURE – FLAT PRICE VS BATTERY SIZE
+%% =========================================================
 figure;
-plot(batterySizes, FP_vec, '-o', ...
-     'LineWidth', 2, ...
-     'MarkerFaceColor','r');
+plot(batterySizes, FP_vec, '-o','LineWidth',2);
 grid on;
 xlabel('Battery capacity (kWh)');
-ylabel('Flat price FP (₹/kWh)');
-title('Optimized size of BESS for proposed FPM');
+ylabel('Flat price (Rs/kWh)');
+title('Optimized Flat Price vs Battery Size');
+
+%% =========================================================
+% EXPORT DETAILED ECONOMIC RESULTS
+%% =========================================================
+outputFile = 'Fig7_FPM.xlsx';
+if exist(outputFile,'file')
+   delete(outputFile);
+end
+Results_Table = table( ...
+   batterySizes', ...
+   FP_vec, ...
+   FixedCost_vec, ...
+   VarCost_vec, ...
+   TotalCost_vec, ...
+   Revenue_vec, ...
+   PM_vec, ...
+   'VariableNames', ...
+   {'BESS_kWh', ...
+    'EV_PRICE', ...
+    'Fixed_Cost', ...
+    'Variable_Cost', ...
+    'Total_Cost', ...
+    'Revenue', ...
+    'PM'} );
+writetable(Results_Table, outputFile);
+%% =========================================================
+% FIND OPTIMAL (MINIMUM FLAT PRICE)
+%% =========================================================
+[FP_min, idx_min] = min(FP_vec);
+Fixed_opt  = FixedCost_vec(idx_min);
+Var_opt    = VarCost_vec(idx_min);
+Total_opt  = TotalCost_vec(idx_min);
+Revenue_opt= Revenue_vec(idx_min);
+PM_opt     = PM_vec(idx_min);
+%% =========================================================
+% LEAVE 2 ROWS GAP AND WRITE OPTIMAL VALUES
+%% =========================================================
+gapRow = height(Results_Table) + 4;   % 2 empty rows
+OptimalSummary = {
+   'BESS_kWh',        batterySizes(idx_min);
+   'EV_PRICE',        FP_min;
+   'Fixed_Cost',      Fixed_opt;
+   'Variable_Cost',   Var_opt;
+   'Total_Cost',      Total_opt;
+   'Revenue',         Revenue_opt;
+   'PM',              PM_opt
+};
+writecell(OptimalSummary, outputFile, ...
+   'Range', sprintf('A%d', gapRow));
+disp('Economic Excel file generated successfully.');
+
 
 
 
@@ -1125,7 +1388,7 @@ nFCS = numel(sheetNames_EV);
 % STATION DATA
 %% ============================
 
-N_co = [13 10 2 10 6 8];
+N_co = [8 5 2 5 4 5];
 
 PV_module_area = 2.6;
 
@@ -1196,7 +1459,7 @@ sheetNames_EV = {
 
 tou_prices = [0.6 1.0 1.5];   % off, mid, peak multipliers
 
-N_co = [13 10 2 10 6 8];
+N_co = [8 5 2 5 4 5];
 PV_module_area = 2.6;
 
 for i=1:6
@@ -1244,7 +1507,7 @@ fprintf('========================================\n');
 % USER SETTINGS
 %% ======================================================
 
-base_start = 0;      % Rs/kWh
+base_start = 10;      % Rs/kWh
 base_end   = 50;     % Rs/kWh
 step       = .1;      % Rs/kWh
 
@@ -1275,7 +1538,7 @@ nFCS = numel(sheetNames_EV);
 % STATION PARAMETERS
 %% ======================================================
 
-N_co = [13 10 2 10 6 8];
+N_co = [8 5 2 5 4 5];
 
 PV_module_area = 2.6;
 
