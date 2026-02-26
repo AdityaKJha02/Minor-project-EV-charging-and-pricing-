@@ -35,8 +35,7 @@ for i = 1:nFCS
     BSA.E_FCS{i} = BSA.P_FCS{i} * dt;
 
     % Daily energy
-    BSA.E_FCS_day(i) = sum(BSA.E_FCS{i});
-
+BSA.E_FCS_day(i) = sum(BSA.E_FCS{i}, 'omitnan');
     % Sorted demand (descending)
     BSA.P_FCS_sorted{i} = sort(BSA.P_FCS{i}, 'descend');
 end
@@ -73,13 +72,19 @@ for i = 1:nFCS
     writetable(T, outputExcel, 'Sheet', sheetName);
 
     % ---- Summary ----
-    summary = {
-        'EV_Energy_kWh',     dt*sum(BSA.P_EV{i}/eta_EV);
-        'PV_Energy_kWh',     dt*sum(BSA.P_PV_avg{i});
-        'Battery_Charge_kWh',dt*sum(BSA.P_BC{i});
-        'Battery_Discharge_kWh',dt*sum(BSA.P_BD{i});
-        'Net_Grid_Energy_kWh',BSA.E_FCS_day(i)
-    };
+    EV_energy   = dt * sum(BSA.P_EV{i}/eta_EV, 'omitnan');
+PV_energy   = dt * sum(BSA.P_PV_avg{i}, 'omitnan');
+BC_energy   = dt * sum(BSA.P_BC{i}, 'omitnan');
+BD_energy   = dt * sum(BSA.P_BD{i}, 'omitnan');
+Grid_energy = BSA.E_FCS_day(i);
+
+summary = {
+    'EV_Energy_kWh',          EV_energy;
+    'PV_Energy_kWh',          PV_energy;
+    'Battery_Charge_kWh',     BC_energy;
+    'Battery_Discharge_kWh',  BD_energy;
+    'Net_Grid_Energy_kWh',    Grid_energy
+};
 
     writecell(summary, outputExcel, ...
         'Sheet', sheetName, 'Range', 'L2');
