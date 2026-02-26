@@ -19,6 +19,7 @@ dt         = params.dt;
 C_FIX      = params.C_FIX;          % from Cd_fixcost_FPM
 C_OandM    = params.C_OandM;        % from Cd_OandM_FPM
 eta_EV = .92;
+
 % Eq. (34): fixed + O&M
 C_FIXED_TOTAL = C_FIX + C_OandM;
 
@@ -50,12 +51,12 @@ P_BD = M(:,6);     % Battery discharging power
 
 % Remove NaNs consistently
 valid = ~isnan(P_EV);
-P_EV = P_EV(valid);
+P_EV = P_EV(valid)/eta_EV;
 P_BC = P_BC(valid);
 P_BD = P_BD(valid);
 
 % Convert to energy per slot
-E_EV_h = (P_EV./eta_EV) * dt;
+E_EV_h = P_EV * dt;
 E_BC_h = P_BC * dt;
 E_BD_h = P_BD * dt;
 
