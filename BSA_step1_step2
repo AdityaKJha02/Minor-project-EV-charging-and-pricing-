@@ -1,33 +1,36 @@
 function BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
-        E_BESS)
-
+        E_BESS, SOC_init_vec, CD_factor_vec)
 
 % =========================================================
 % Battery Scheduling Algorithm
 % Implicit mutual exclusivity via grid constraints
 % 10-minute resolution
 % =========================================================
-
+% 66.375, 68.09, 50.57, 35.4, 12.64
 %% ---------------------------
 % PARAMETERS
 % ---------------------------
 SOC_min = 20;          % %
 SOC_max = 80;          % %
-SOC_init = 55.2;   % % starting SoC at 0 hr
 
-beta_ch  = 150;        % kW
-beta_dis = 150;        % kW
+beta_ch  = 75;        % kW
+beta_dis = 75;        % kW
 
-eta_BC = 0.95;
-eta_BD = 0.95;
-
-
+eta_BC = 0.92;
+eta_BD = 0.90;
+eta_EV = 0.92;
 dt     = 1/6;          % hour
 Nslots = 144;
 nFCS   = 6;
+if numel(SOC_init_vec) ~= nFCS
+    error('SOC_init_vec must be length %d (one per FCS)', nFCS);
+end
 
+if numel(CD_factor_vec) ~= nFCS
+    error('CD_factor_vec must be length %d (one per FCS)', nFCS);
+end
 %% ---------------------------
 % READ RTP DATA
 % ---------------------------
@@ -67,10 +70,7 @@ for i = 1:nFCS
     P_EV{i} = EV_temp(1:Nslots,7);
 
     % 🔑 Contract demand = peak EV load
-    P_CD(i) = max(P_EV{i})/2.5;
-
-    % ---------------------------
-    % PV generation
+P_CD(i) = max(P_EV{i}/eta_EV) / CD_factor_vec(i);    % PV generation
     % ---------------------------
     PV_temp = readmatrix(PV_file,'Sheet',sheetNames_PV{i});
     P_PV_avg{i} = PV_temp(1:Nslots,2);
@@ -98,12 +98,11 @@ for i = 1:nFCS
     P_BD{i} = zeros(Nslots,1);
 
     SOC{i} = zeros(Nslots+1,1);
-    SOC{i}(1) = SOC_init;
-
+SOC{i}(1) = SOC_init_vec(i);
 
     for t = 1:Nslots
 
-        Net_Load = P_EV{i}(t) - P_PV_avg{i}(t);
+        Net_Load = (P_EV{i}(t) / eta_EV) - P_PV_avg{i}(t);
 
         % =====================================================
         % CHARGING REGION: Net_Load ≤ P_CD
@@ -178,5 +177,5 @@ BSA.Omega_BC    = Omega_BC;
 BSA.Omega_BD    = Omega_BD;
 
 BSA.E_EV_day    = E_EV_day;
-
+BSA.eta_EV = eta_EV;
 end
