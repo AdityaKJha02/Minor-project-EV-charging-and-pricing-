@@ -1,4 +1,3 @@
-clc; clear; close all;
 
 %% =========================================================
 % INPUT FILES
@@ -31,11 +30,16 @@ sheetNames_PV = { ...
 % RUN BATTERY SCHEDULING ALGORITHM (BSA)
 % =========================================================
 batterySize = 1600;  % kWh
+% =========================================================
+% USER INPUT PARAMETERS
+% =========================================================
 
+SOC_init_vec = [30 30 30 30 30 30];   % one value per FCS
+CD_factor    = 1.4;                   % contract demand divisor
 BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
-        batterySize);
+        batterySize, SOC_init_vec, CD_factor);
 
 disp('✔ Battery Scheduling Algorithm executed successfully');
 
@@ -68,32 +72,18 @@ P_grid = cell(1,nFCS);
 E_grid_day = zeros(1,nFCS);
 
 for i = 1:nFCS
-    P_grid{i} = ...
-        BSA.P_EV{i} ...
-      - BSA.P_PV_avg{i} ...
-      + BSA.P_BC{i} ...
-      - BSA.P_BD{i};
+    eta_EV = BSA.eta_EV;
+P_grid{i} = ...
+    (BSA.P_EV{i}/eta_EV) ...
+  - BSA.P_PV_avg{i} ...
+  + BSA.P_BC{i} ...
+  - BSA.P_BD{i};
 
     E_grid_day(i) = sum(P_grid{i}) * dt;
 end
-for i = 1:nFCS
-    
-    P_grid{i} = ...
-        BSA.P_EV{i} ...
-      - BSA.P_PV_avg{i} ...
-      + BSA.P_BC{i} ...
-      - BSA.P_BD{i};
 
-    fprintf('\nFCS %d diagnostics:\n', i);
-    fprintf('NaN in P_EV: %d\n', any(isnan(BSA.P_EV{i})));
-    fprintf('NaN in P_PV: %d\n', any(isnan(BSA.P_PV_avg{i})));
-    fprintf('NaN in P_BC: %d\n', any(isnan(BSA.P_BC{i})));
-    fprintf('NaN in P_BD: %d\n', any(isnan(BSA.P_BD{i})));
 
-    fprintf('NaN in P_grid: %d\n', any(isnan(P_grid{i})));
 
-    E_grid_day(i) = sum(P_grid{i}, 'omitnan') * dt;  % temporary safe sum
-end
 for i = 1:nFCS
     
     nanIdx = find(isnan(BSA.P_EV{i}));
@@ -145,11 +135,46 @@ xlabel('Time (hours)')
 title('Net Grid Power')
 
 %% =========================================================
+% BATTERY SOC OF ALL 6 STATIONS (NEW FIGURE)
+% =========================================================
+
+figure('Color','w','Name','Battery SOC - All FCS');
+
+for i = 1:nFCS
+    
+    subplot(nFCS,1,i)
+    plot(time_h, BSA.SOC{i}(1:end-1), 'm','LineWidth',1.2)
+    
+    ylim([BSA.SOC_min-5 BSA.SOC_max+5])
+    ylabel('SOC (%)')
+    title(['Battery SOC - FCS ', num2str(i)])
+    grid on
+    
+    if i == nFCS
+        xlabel('Time (hours)')
+    end
+
+end
+%% =========================================================
 % DISPLAY DAILY ENERGY SUMMARY
 % =========================================================
 disp('Daily Grid Energy (kWh) per FCS:')
 disp(E_grid_day)
+%% =========================================================
+% SOC FIRST & LAST SLOT CHECK
+% =========================================================
 
+fprintf('\n============================================\n');
+fprintf('SOC START & END OF DAY\n');
+fprintf('============================================\n');
+
+for i = 1:nFCS
+    SOC_start = BSA.SOC{i}(1);
+    SOC_end   = BSA.SOC{i}(end);
+
+    fprintf('FCS %d → SOC_start = %.2f %% | SOC_end = %.2f %%\n', ...
+            i, SOC_start, SOC_end);
+end
 % -----------------------------------------
 % STEP 5: Power, energy & Excel
 % -----------------------------------------
@@ -161,3 +186,38 @@ fprintf('✔ STEP-5 completed successfully\n');
 
 
 
+%% =========================================================
+% SLOT-WISE VERIFICATION (MANUAL CHECK)
+% =========================================================
+
+fcsID = 1;     % choose station
+slotID = 5;   % choose slot (1–144)
+
+fprintf('\n============================================\n');
+fprintf('DEBUG CHECK → FCS %d | SLOT %d\n', fcsID, slotID);
+fprintf('============================================\n');
+
+Pev  = BSA.P_EV{fcsID}(slotID);
+Ppv  = BSA.P_PV_avg{fcsID}(slotID);
+Pbc  = BSA.P_BC{fcsID}(slotID);
+Pbd  = BSA.P_BD{fcsID}(slotID);
+SOC_now  = BSA.SOC{fcsID}(slotID);
+SOC_next = BSA.SOC{fcsID}(slotID+1);
+eta_EV = BSA.eta_EV;
+
+Pgrid_manual = (Pev/eta_EV) - Ppv + Pbc - Pbd;
+Pgrid_code   = P_grid{fcsID}(slotID);
+
+fprintf('P_EV      = %.4f kW\n', Pev);
+fprintf('P_PV      = %.4f kW\n', Ppv);
+fprintf('P_BC      = %.4f kW\n', Pbc);
+fprintf('P_BD      = %.4f kW\n', Pbd);
+
+fprintf('\nGrid Power (manual) = %.4f kW\n', Pgrid_manual);
+fprintf('Grid Power (code)   = %.4f kW\n', Pgrid_code);
+
+fprintf('\nSOC_now   = %.4f %%\n', SOC_now);
+fprintf('SOC_next  = %.4f %%\n', SOC_next);
+
+dSOC_actual = SOC_next - SOC_now;
+fprintf('SOC change = %.4f %%\n', dSOC_actual);
