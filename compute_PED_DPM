@@ -144,18 +144,6 @@ missingEVs = round(sum(N_EV_DPM) - sum(N_EV_floor));
 N_EV_approx = N_EV_floor;
 N_EV_approx(idx(1:missingEVs)) = N_EV_approx(idx(1:missingEVs)) + 1;
 
-%% ---------------------------
-% PRINT EV COUNTS (Before vs After PED)
-% ---------------------------
 
-total_FPM = sum(N_EV_FPM);
-total_DPM = sum(N_EV_DPM);
-
-fprintf('\n=====================================\n');
-fprintf('EV ARRIVALS COMPARISON\n');
-fprintf('-------------------------------------\n');
-fprintf('Total EVs before PED (FPM): %.2f\n', total_FPM);
-fprintf('Total EVs after PED  (DPM): %.2f\n', total_DPM);
-fprintf('=====================================\n\n');
 end
 
