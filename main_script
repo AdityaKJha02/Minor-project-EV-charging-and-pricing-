@@ -317,7 +317,6 @@ best = randomWeightSearch_MaxEnergy( ...
 %% 14. Battery Scheduling Algorithm
 %% =========================================================
 
-
 %% =========================================================
 % INPUT FILES
 % =========================================================
@@ -359,7 +358,7 @@ tPts = [ ...
 %% =========================================================
 % RUN BATTERY SCHEDULING ALGORITHM (BSA)
 % =========================================================
-batterySize = 1600;  % kWh
+batterySize = 1500;  % kWh
 % =========================================================
 % USER INPUT PARAMETERS
 % =========================================================
@@ -558,41 +557,8 @@ for i = 1:nFCS
              i, SOC_start, SOC_end, SOC_max_day, SOC_min_day);
 end
 
-
 %% =========================================================
 %% 15. FPM ALGORITHM – COMPLETE MAIN SCRIPT
-%% =========================================================
-
-%% =========================================================
-% STATION DATA
-%% =========================================================
-N_co = [8 5 2 5 4 5];          % chargers per FCS
-nFCS = numel(N_co);
-
-PV_module_area = 2.6;          % m^2
-
-A_fc = zeros(1,nFCS);
-for i = 1:nFCS
-    A_fc(i) = Area_calc(N_co(i));
-end
-
-N_pv = round(0.85 .* A_fc ./ PV_module_area);
-
-%% =========================================================
-% BATTERY SIZE SWEEP
-%% =========================================================
-batterySizes = 500:200:6000;   % kWh
-nB = numel(batterySizes);
-
-FP_vec        = zeros(nB,1);
-FixedCost_vec = zeros(nB,1);
-VarCost_vec   = zeros(nB,1);
-TotalCost_vec = zeros(nB,1);
-Revenue_vec   = zeros(nB,1);
-PM_vec        = zeros(nB,1);
-
-%% =========================================================
-% FILE INPUTS
 %% =========================================================
 EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
 PV_file  = 'PV_Results_6_NPV_10min.xlsx';
@@ -616,6 +582,39 @@ sheetNames_PV = {
    'NPV_397'
    'NPV_408'
 };
+
+%% =========================================================
+% STATION DATA
+%% =========================================================
+N_co = [8 5 2 5 4 5];          % chargers per FCS
+nFCS = numel(N_co);
+SOC_init_vec = [50 55 70 55 60 60];   % one value per FCS
+CD_factor_vec = [1.44 1.58 3.13 1.49 1.67 1.61];
+PV_module_area = 2.584;          % m^2
+
+A_fc = zeros(1,nFCS);
+for i = 1:nFCS
+    A_fc(i) = Area_calc(N_co(i));
+end
+
+N_pv = round(0.85 .* A_fc ./ PV_module_area);
+
+%% =========================================================
+% BATTERY SIZE SWEEP
+%% =========================================================
+batterySizes = 300:200:2500;   % kWh sweep
+nB = numel(batterySizes);
+FP_vec        = zeros(nB,1);
+FixedCost_vec = zeros(nB,1);
+VarCost_vec   = zeros(nB,1);
+TotalCost_vec = zeros(nB,1);
+Revenue_vec   = zeros(nB,1);
+PM_vec        = zeros(nB,1);
+
+%% =========================================================
+% FILE INPUTS
+%% =========================================================
+
 
 %% =========================================================
 % SUBSTATION CAPACITY
@@ -644,19 +643,21 @@ params.rho_PUR = rtp(1:144,2);    % purchase price
 %% =========================================================
 for k = 1:nB
 
-    fprintf('\nRunning BESS size = %d kWh\n', batterySizes(k));
+    batterySize = batterySizes(k);
 
-    battery_vec = batterySizes(k) * ones(1,nFCS);
+    fprintf('\nRunning BESS size = %d kWh\n', batterySize);
+
+    battery_vec = batterySize * ones(1,nFCS);
 
     % ------------------------------
     % Fixed Cost (Eq. 35)
     % ------------------------------
-    C_FIX_vec = Cd_fixcost_FPM(battery_vec, N_co, beta_SS, N_pv);
+    C_FIX_vec   = Cd_fixcost_FPM(battery_vec, N_co, beta_SS, N_pv);
     C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
 
     params.C_FIX   = C_FIX_vec;
     params.C_OandM = C_OandM_vec;
-    params.E_BESS  = batterySizes(k);
+    params.E_BESS  = batterySize;
 
     % ------------------------------
     % BSA (Battery Scheduling)
@@ -664,9 +665,9 @@ for k = 1:nB
     BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
-        batterySizes(k));
+        batterySize, SOC_init_vec, CD_factor_vec);
 
-    % TEMP_BSA_FPM.xlsx generated HERE
+    % Generate temporary Excel
     BSA_step5_generateExcel(BSA, tempExcel);
 
     % ------------------------------
@@ -760,6 +761,7 @@ Var_opt    = VarCost_vec(idx_min);
 Total_opt  = TotalCost_vec(idx_min);
 Revenue_opt= Revenue_vec(idx_min);
 PM_opt     = PM_vec(idx_min);
+
 %% =========================================================
 % LEAVE 2 ROWS GAP AND WRITE OPTIMAL VALUES
 %% =========================================================
@@ -778,7 +780,36 @@ writecell(OptimalSummary, outputFile, ...
 disp('Economic Excel file generated successfully.');
 
 
+%% =========================================================
+% REGENERATE BSA FILE FOR OPTIMAL BATTERY SIZE
+%% =========================================================
 
+optimalBattery = batterySizes(idx_min);
+
+fprintf('\nRe-running BSA for optimal battery size = %d kWh\n', optimalBattery);
+
+% Recompute battery vector
+battery_vec_opt = optimalBattery * ones(1,nFCS);
+
+% Recompute fixed cost (optional but clean)
+C_FIX_vec   = Cd_fixcost_FPM(battery_vec_opt, N_co, beta_SS, N_pv);
+C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
+
+% Update params
+params.C_FIX   = C_FIX_vec;
+params.C_OandM = C_OandM_vec;
+params.E_BESS  = optimalBattery;
+
+% Run BSA again
+BSA_opt = BSA_step1_step2( ...
+    EV_file, PV_file, RTP_file, ...
+    sheetNames_EV, sheetNames_PV, ...
+    optimalBattery, SOC_init_vec, CD_factor_vec);
+
+% Overwrite TEMP_BSA_FPM.xlsx with optimal result
+BSA_step5_generateExcel(BSA_opt, tempExcel);
+
+disp('✔ TEMP_BSA_FPM.xlsx overwritten with optimal battery results');
 
 %% =========================================================
 %% 16. PED Modelling
