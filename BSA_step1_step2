@@ -31,6 +31,7 @@ end
 if numel(CD_factor_vec) ~= nFCS
     error('CD_factor_vec must be length %d (one per FCS)', nFCS);
 end
+
 %% ---------------------------
 % READ RTP DATA
 % ---------------------------
