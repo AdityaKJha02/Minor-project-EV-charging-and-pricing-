@@ -1,6 +1,9 @@
-function [N_EV_DPM, N_EV_approx, E_EV_DPM, tau_h, kappa] = compute_PED_DPM( ...
+function [N_EV_DPM, N_EV_approx, E_EV_DPM, tau_h, price_h, kappa] = ...
+        compute_PED_DPM( ...
         timeGrid_min, RTP_file, ...
-        EV_file, sheetNames_EV, fcsID)
+        EV_file, sheetNames_EV, fcsID, ...
+        base_price)
+
 
 
 % =========================================================
@@ -53,6 +56,26 @@ for k = 1:nT
     N_EV_FPM(k) = getEVcountAtTime( ...
         EV_file, sheetNames_EV, fcsID, timeGrid_min(k));
 end
+%% ---------------------------
+% STEP 3: SIGMOID PRICE FROM τ
+% ---------------------------
+%% ---------------------------
+% STEP 3: DPM PRICE FROM τ (FIXED)
+% ---------------------------
+
+% Desired absolute price band
+p_min = 7;      % Rs/kWh
+p_max = 13;     % Rs/kWh
+beta  = 8;      % sensitivity
+tau0  = 0.5;    % midpoint
+
+price_norm = p_min + ...
+    (p_max - p_min) ./ ...
+    (1 + exp(beta * (tau_h - tau0)));
+
+price_h = base_price .* price_norm;
+
+
 
 %% ---------------------------
 % STEP 4: Compute κ (Eq. 21)
@@ -87,18 +110,23 @@ for k = 1:nT
 end
 
 % --- Average energy per EV ---
-N_EV_FPM_total = sum(N_EV_FPM);
-E_EV_FPM_total = sum(E_EV_FPM_h);
+EVtimeline_file = 'EVFCS_EV_Timeline.xlsx';
+sheet_tl = sheetNames_EV{fcsID};
+e_bar = getAverageSessionEnergy(EVtimeline_file, sheet_tl);
 
-if N_EV_FPM_total == 0
-    e_bar = 0;
-else
-    e_bar = E_EV_FPM_total / N_EV_FPM_total;
+% fallback if no timeline data:
+if e_bar == 0
+    N_EV_FPM_total = sum(N_EV_FPM);
+    if N_EV_FPM_total > 0
+        e_bar = sum(E_EV_FPM_h) / N_EV_FPM_total;
+    else
+        e_bar = 0;
+    end
 end
+
 
 % --- DPM energy ---
 E_EV_DPM = N_EV_DPM * e_bar;
-
 
 % ---------------------------------
 % INTEGER EV ARRIVALS (NO RNG, MASS CONSERVING)
@@ -116,6 +144,18 @@ missingEVs = round(sum(N_EV_DPM) - sum(N_EV_floor));
 N_EV_approx = N_EV_floor;
 N_EV_approx(idx(1:missingEVs)) = N_EV_approx(idx(1:missingEVs)) + 1;
 
+%% ---------------------------
+% PRINT EV COUNTS (Before vs After PED)
+% ---------------------------
 
+total_FPM = sum(N_EV_FPM);
+total_DPM = sum(N_EV_DPM);
+
+fprintf('\n=====================================\n');
+fprintf('EV ARRIVALS COMPARISON\n');
+fprintf('-------------------------------------\n');
+fprintf('Total EVs before PED (FPM): %.2f\n', total_FPM);
+fprintf('Total EVs after PED  (DPM): %.2f\n', total_DPM);
+fprintf('=====================================\n\n');
 end
 
