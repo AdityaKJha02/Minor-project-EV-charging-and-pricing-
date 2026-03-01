@@ -27,27 +27,62 @@ function generateFCS_Summary( ...
 
         max_ports_used = max(portCounts);
 
-        power_kW      = Tpow{:,7};
-        max_power     = max(power_kW);
-        avg_power_144 = mean(power_kW(6:149), 'omitnan');
+        %% Restrict to first 144 slots
+Tpow_144 = Tpow(1:144, :);
+
+power_kW = Tpow_144{:,7};
+activePorts_144 = Tpow_144{:,4};
+
+% Recompute port counts for 144 slots only
+portCounts = zeros(height(Tpow_144),1);
+for k = 1:height(Tpow_144)
+    val = string(activePorts_144{k});
+    if strlength(val) == 0 || ismissing(val)
+        portCounts(k) = 0;
+    else
+        portCounts(k) = numel(strsplit(val, ','));
+    end
+end
+
+max_ports_used = max(portCounts);
+
+max_power     = max(power_kW);
+avg_power_144 = mean(power_kW, 'omitnan');
 
         %% ================================
         % FILE 2: EV Timeline
         % ================================
         Ttime = readtable(timelineFile, 'Sheet', sheet);
 
-        max_port_index = max(Ttime{:,4});
-        avg_wait_min   = mean(Ttime{:,6}, 'omitnan');
-        max_wait_min   = max(Ttime{:,6});
-        avg_charge_min = mean(Ttime{:,8}, 'omitnan');
-        max_charge_min = max(Ttime{:,8});
-        avg_energy_kWh = mean(Ttime{:,12}, 'omitnan');
+% Extract arrival column (Column E = 5)
+arrival_min = Ttime{:,5};
 
+% Logical index for arrival <= 1430
+valid_idx = arrival_min <= 1430;
+
+% Filter table
+T_filtered = Ttime(valid_idx, :);
+
+% Now compute statistics only on filtered rows
+
+max_port_index = max(T_filtered{:,4});
+
+avg_wait_min   = mean(T_filtered{:,6}, 'omitnan');
+max_wait_min   = max(T_filtered{:,6});
+
+avg_charge_min = mean(T_filtered{:,8}, 'omitnan');
+max_charge_min = max(T_filtered{:,8});
+
+nEVs = height(T_filtered);
+
+total_energy_kWh = sum(T_filtered{:,12}, 'omitnan');
+avg_energy_kWh   = mean(T_filtered{:,12}, 'omitnan');
         %% ================================
         % SUMMARY TABLE
         % ================================
         Summary = table( ...
-            max_ports_used, ...
+            nEVs, ...
+            total_energy_kWh, ...
             max_power, ...
             avg_power_144, ...
             max_port_index, ...
@@ -57,7 +92,8 @@ function generateFCS_Summary( ...
             max_charge_min, ...
             avg_energy_kWh, ...
             'VariableNames', { ...
-                'Max_Ports_Used', ...
+            'Num_EVs', ...
+            'Total_Energy_Sold_kWh', ...
                 'Max_Power_kW', ...
                 'Avg_Power_144slots_kW', ...
                 'Max_Port_Index', ...
