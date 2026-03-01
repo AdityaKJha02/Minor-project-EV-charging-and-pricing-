@@ -1,9 +1,12 @@
 function [N_EV_DPM, N_EV_int, E_EV_DPM, tau_h, price_h, kappa] = ...
     compute_PED_DPM_sigmoid( ...
         timeGrid_min, RTP_file, ...
-        EV_file, sheetNames_EV, fcsID, ...
-        base_price)
-
+        EV_file, sheetNames_EV, ...
+        summary_file, ...
+        fcsID, base_price)
+fprintf('\n========================================\n');
+fprintf('FCS %d | Base Price = %.2f Rs/kWh\n', fcsID, base_price);
+fprintf('========================================\n');
 % =========================================================
 % PED / DPM with sigmoid price scaling around base_price
 % Price range ≈ [0.7, 1.3] * base_price
@@ -26,6 +29,9 @@ for k = 1:nT
     idx = find(timeRTP == timeGrid_min(k),1);
     tau_h(k) = tau_all(idx);
 end
+fprintf('\nSTEP 1: RTP → tau\n');
+fprintf('tau_h (first 5 values):\n');
+disp(tau_h(1:5));
 
 %% ---------------------------
 % STEP 2: Baseline EV arrivals (FPM)
@@ -36,6 +42,10 @@ for k = 1:nT
         EV_file, sheetNames_EV, fcsID, timeGrid_min(k));
 end
 
+fprintf('\nSTEP 2: Baseline EV Arrivals (FPM)\n');
+fprintf('Total FPM EVs = %.2f\n', sum(N_EV_FPM));
+fprintf('First 5 values:\n');
+disp(N_EV_FPM(1:5));
 %% ---------------------------
 % STEP 3: Sigmoid price multiplier
 % ---------------------------
@@ -49,41 +59,45 @@ multiplier = m_min + ...
     (1 + exp(beta * (tau_h - tau0)));
 
 price_h = base_price .* multiplier;
-
+fprintf('\nSTEP 3: Price Calculation\n');
+fprintf('Price range = %.2f to %.2f Rs/kWh\n', ...
+        min(price_h), max(price_h));
+fprintf('First 5 prices:\n');
+disp(price_h(1:5));
 %% ---------------------------
 % STEP 4: κ (normalization)
 % ---------------------------
 kappa = sum(N_EV_FPM) / sum(tau_h .* N_EV_FPM);
-
+fprintf('\nSTEP 4: Normalization\n');
+fprintf('kappa = %.4f\n', kappa);
 %% ---------------------------
 % STEP 5: DPM EV arrivals
 % ---------------------------
 N_EV_DPM = kappa * tau_h .* N_EV_FPM;
-
+fprintf('\nSTEP 5: DPM EV Arrivals\n');
+fprintf('Total DPM EVs = %.2f\n', sum(N_EV_DPM));
+fprintf('First 5 values:\n');
+disp(N_EV_DPM(1:5));
 %% ---------------------------
-% STEP 6: Energy calculation
+% STEP 6: Average session energy from summary file
 % ---------------------------
-dt = 1/6;
-EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
-P_EV = EV_temp(:,7);
-timeCol = EV_temp(:,3);
 
-E_EV_FPM_h = zeros(nT,1);
-for k = 1:nT
-    idx = find(timeCol == timeGrid_min(k),1);
-    if ~isempty(idx)
-        E_EV_FPM_h(k) = P_EV(idx) * dt;
-    end
-end
+sheetName = sprintf('FCS_%d', fcsID);
 
-if sum(N_EV_FPM) > 0
-    e_bar = sum(E_EV_FPM_h) / sum(N_EV_FPM);
-else
+% Read only J2 (Avg_Energy_kWh)
+e_bar = readmatrix(summary_file, ...
+                   'Sheet', sheetName, ...
+                   'Range', 'J2');
+
+if isempty(e_bar) || isnan(e_bar)
+    warning('Avg_Energy_kWh missing for FCS %d. Setting e_bar=0', fcsID);
     e_bar = 0;
 end
 
 E_EV_DPM = N_EV_DPM * e_bar;
-
+fprintf('\nSTEP 6: Average Session Energy\n');
+fprintf('Average energy per EV (e_bar) = %.2f kWh\n', e_bar);
+fprintf('Total DPM Energy = %.2f kWh\n', sum(E_EV_DPM));
 %% ---------------------------
 % STEP 7: Integerization
 % ---------------------------
@@ -94,5 +108,7 @@ missing = round(sum(N_EV_DPM) - sum(floorEV));
 [~,idx] = sort(residual,'descend');
 N_EV_int = floorEV;
 N_EV_int(idx(1:missing)) = N_EV_int(idx(1:missing)) + 1;
-
+fprintf('\nSTEP 7: Integerization\n');
+fprintf('Total EVs (fractional) = %.2f\n', sum(N_EV_DPM));
+fprintf('Total EVs (integer)    = %d\n', sum(N_EV_int));
 end
