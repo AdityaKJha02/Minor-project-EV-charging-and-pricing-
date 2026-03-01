@@ -5,14 +5,14 @@ clc; clear; close all;
 % ================================
 RTP_file = 'RTP_grid_cost_10min.xlsx';
 EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
-
+summary_file = 'EVFCS_FCS_Summary.xlsx';
 sheetNames_EV = {
-    'EVFCS_1_6_8'
-    'EVFCS_2_12_13'
-    'EVFCS_3_21_20'
-    'EVFCS_4_6_5'
-    'EVFCS_5_6_2'
-    'EVFCS_6_11_12'
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
 };
 
 %% ================================
@@ -20,13 +20,18 @@ sheetNames_EV = {
 % ================================
 fcsID = 1;
 timeGrid_min = (0:10:1430)';
+base_price = 20;   % Rs/kWh
 
 %% ================================
 % RUN PED / DPM
 % ================================
-[N_EV_DPM, N_EV_approx, E_EV_DPM, tau_h, kappa] = compute_PED_DPM( ...
+[N_EV_DPM, N_EV_approx, E_EV_DPM, ...
+    tau_h, price_h, kappa] = ...
+    compute_PED_DPM_sigmoid( ...
     timeGrid_min, RTP_file, ...
-    EV_file, sheetNames_EV, fcsID);
+    EV_file, sheetNames_EV, ...
+    summary_file, ...
+    fcsID, base_price);
 
 %% ================================
 % COMPUTE FPM ENERGY (REFERENCE)
@@ -57,10 +62,6 @@ fprintf('Difference            = %.6e kWh\n', ...
 %% ================================
 % DISPLAY TABLE
 % ================================
-
-
-
-
 T = table( ...
     timeGrid_min, ...
     tau_h, ...
@@ -103,14 +104,6 @@ grid on
 
 sgtitle(['PED/DPM Verification – FCS ',num2str(fcsID)])
 
-
-
-
-
-
-
-
-
 %% ================================
 % TIME GRID
 % ================================
@@ -126,9 +119,11 @@ totalEV_day_all = zeros(nFCS,1);
 
 for fcsID = 1:nFCS
 
-    [~, N_EV_approx, ~, ~, ~] = compute_PED_DPM( ...
-        timeGrid_min, RTP_file, ...
-        EV_file, sheetNames_EV, fcsID);
+    [~, N_EV_approx, ~, ~, ~] = compute_PED_DPM_sigmoid( ...
+    timeGrid_min, RTP_file, ...
+    EV_file, sheetNames_EV, ...
+    summary_file, ...
+    fcsID, base_price);
 
     N_EV_approx_all(:,fcsID) = N_EV_approx;
     totalEV_day_all(fcsID)   = sum(N_EV_approx);
@@ -173,3 +168,158 @@ fprintf('Excel file written: %s\n', outputFile);
 fprintf('Weight_hourly = %.4f\n', weight_hourly);
 
 fprintf('Sum of weights = %.6f\n', sum(weight_hourly));
+
+%% ================================
+% COMPUTE POWER FROM ENERGY
+% ================================
+P_EV_FPM = E_EV_FPM_h * 6;   % kW
+P_EV_DPM = E_EV_DPM   * 6;   % kW
+
+%% ================================
+% EXPORT FULL RESULTS TO EXCEL
+% ================================
+outputFile_full = 'PED_DPM_Full_Results.xlsx';
+
+T_export = table( ...
+    timeGrid_min, ...
+    tau_h, ...
+    N_EV_DPM, ...
+    N_EV_approx, ...
+    E_EV_FPM_h, ...
+    E_EV_DPM, ...
+    P_EV_FPM, ...
+    P_EV_DPM, ...
+    'VariableNames', ...
+    {'Time_min', ...
+     'tau_h', ...
+     'N_EV_DPM_frac', ...
+     'N_EV_DPM_int', ...
+     'E_EV_FPM_kWh', ...
+     'E_EV_DPM_kWh', ...
+     'P_EV_FPM_kW', ...
+     'P_EV_DPM_kW'} );
+
+writetable(T_export, outputFile_full, 'Sheet', 'PED_DPM');
+
+fprintf('\nFull results Excel file written: %s\n', outputFile_full);
+
+%% ================================
+% HOURLY AVERAGE POWER (10-min → 1 hour)
+% ================================
+
+% Reshape into 6 rows × 24 columns
+P_FPM_reshaped = reshape(P_EV_FPM, 6, 24);
+P_DPM_reshaped = reshape(P_EV_DPM, 6, 24);
+
+% Average of 6 slots per hour
+P_FPM_hourly = mean(P_FPM_reshaped, 1)';   % 24×1
+P_DPM_hourly = mean(P_DPM_reshaped, 1)';   % 24×1
+
+hours = (0:23)';
+
+%% ================================
+% PLOT HOURLY POWER COMPARISON
+% ================================
+figure;
+
+plot(hours, P_FPM_hourly, '-o','LineWidth',2); hold on;
+plot(hours, P_DPM_hourly, '-s','LineWidth',2);
+
+xlabel('Hour of Day');
+ylabel('Average Power (kW)');
+title(['Hourly Power Consumption – FCS ', num2str(fcsID)]);
+legend('FPM Power','DPM Power','Location','best');
+grid on;
+
+%% ================================
+% 10-min plot: Power (left) and RTP/price (right)
+%% ================================
+% Ensure vectors are column vectors and same length
+time_hours = timeGrid_min(:) / 60;   % convert minutes -> hours
+
+% If P_EV_FPM/P_EV_DPM not present, compute from energies:
+% P_EV_FPM = E_EV_FPM_h * 6;
+% P_EV_DPM = E_EV_DPM * 6;
+
+% Read RTP (fallback) if price_h not available
+if ~exist('price_h','var') || isempty(price_h)
+    M = readmatrix(RTP_file);
+    timeRTP = M(:,1);
+    rhoSELL = M(:,3);          % whatever the RTP column is
+    % match times from timeGrid_min -> timeRTP
+    price_h = zeros(size(timeGrid_min));
+    for k = 1:numel(timeGrid_min)
+        idx = find(timeRTP == timeGrid_min(k),1);
+        if ~isempty(idx)
+            price_h(k) = rhoSELL(idx);
+        else
+            price_h(k) = NaN;
+        end
+    end
+end
+
+% Create figure
+figure('Color','w','Position',[200 200 900 480]);
+
+% Left axis: 10-min power
+yyaxis left
+h1 = plot(time_hours, P_EV_FPM, '-o', 'LineWidth', 1.5, 'MarkerSize',4);
+hold on
+h2 = plot(time_hours, P_EV_DPM, '-s', 'LineWidth', 1.5, 'MarkerSize',4);
+ylabel('Power (kW)')
+ylim([0, max([P_EV_FPM; P_EV_DPM])*1.15])   % pad top
+set(gca,'YColor','k')
+
+% Right axis: Price / RTP
+yyaxis right
+% If price_h is on very different scale, you may want to plot a smoothed version or scale it
+h3 = plot(time_hours, price_h, '-','LineWidth',2);
+ylabel('Price (Rs/kWh)')
+set(gca,'YColor','k')
+
+% Formatting
+xlabel('Hour of Day')
+xlim([0 24])
+xticks(0:1:24)
+grid on
+title(sprintf('10-min Power & RTP — FCS %d', fcsID))
+
+% Legend
+legend([h1 h2 h3], {'FPM Power (10-min)', 'DPM Power (10-min)', 'RTP / price'}, ...
+    'Location','northwest')
+
+% Optional: improve visibility for dense marker lines (reduce markers)
+set(h1, 'MarkerIndices', 1:6:numel(time_hours));   % show marker every 6 points (hourly)
+set(h2, 'MarkerIndices', 1:6:numel(time_hours));
+
+% Optional: add hourly vertical separators
+hold on
+for hr = 0:23
+    xline(hr,'Color',[0.9 0.9 0.9],'LineStyle','--','LineWidth',0.5);
+end
+
+% Make sure plot looks good when price has NaNs
+if any(isnan(price_h))
+    warning('Some RTP times could not be matched to timeGrid_min; check RTP_file timestamps.');
+end
+
+%% ================================
+% PLOT – DPM PRICE (10-min)
+%% ================================
+
+figure('Color','w','Position',[200 200 900 400]);
+
+plot(time_hours, price_h, '-o', ...
+     'LineWidth',1.8, ...
+     'MarkerSize',4);
+
+xlabel('Hour of Day');
+ylabel('DPM Price (Rs/kWh)');
+title(sprintf('10-min DPM Price Variation — FCS %d', fcsID));
+
+xlim([0 24]);
+xticks(0:1:24);
+grid on;
+
+% Reduce marker density for clarity
+set(gca,'FontSize',11);
