@@ -83,8 +83,15 @@ disp(N_EV_FPM');
 %% ---------------------------
 %% STEP 2B: Hourly FPM Power (Correct Logic)
 
-P_EV_10min = EV_temp(2:145,7);   % Column 7 = 10-min power (kW)
-P_EV_10min(isnan(P_EV_10min)) = 0;
+% Determine available rows
+nRows = size(EV_temp,1);
+
+% Always extract first 144 slots safely
+if nRows >= 144
+    P_EV_10min = EV_temp(2:145,7);   % First 144 time slots
+else
+    error('EV data must contain at least 144 rows');
+end
 
 % Reshape into 6 slots × 24 hours
 P_reshaped = reshape(P_EV_10min, 6, 24);
