@@ -55,9 +55,9 @@ for i = 1:nFCS
 
     fprintf('Matrix size = %d x %d\n', size(M,1), size(M,2));
 
-    P_EV = M(:,3);
-    P_BC = M(:,5);
-    P_BD = M(:,6);
+    P_EV = M(2:145,3);
+P_BC = M(2:145,5);
+P_BD = M(2:145,6);
 
     valid = ~isnan(P_EV);
 
