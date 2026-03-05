@@ -67,29 +67,31 @@ end
 %% =========================================================
 % BATTERY SWEEP
 %% =========================================================
-batterySizes = 300:200:2500;
+batterySizes = 1200:400:3000;
 nB = numel(batterySizes);
 
-Revenue_vec = zeros(nB,1);
-Cost_vec    = zeros(nB,1);
-PM_vec      = zeros(nB,1);
-BasePrice_vec = zeros(nB,1);
+BasePrice_vec  = zeros(nB,1);
+FixedCost_vec  = zeros(nB,1);
+VarCost_vec    = zeros(nB,1);
+TotalCost_vec  = zeros(nB,1);
+Revenue_vec    = zeros(nB,1);
+PM_vec         = zeros(nB,1);
 
 %% =========================================================
 % RTP
 %% =========================================================
 rtp = readmatrix(RTP_file);
 
-params.rho_PUR = rtp(1:144,2);
+params.rho_PUR = rtp(2:145,2);
 params.dt      = 1/6;
 
 %% =========================================================
 % PED PARAMETERS (same logic as FPM)
 %% =========================================================
 params.PM_DES       = 0.25;
-params.basePrice0   = 01;
+params.basePrice0   = 08.5;
 params.basePriceMax = 30;
-params.deltaPrice   = 0.1;
+params.deltaPrice   = 0.5;
 
 %% =========================================================
 % MAIN LOOP
@@ -143,9 +145,12 @@ for k = 1:nB
 
     %% Store results
     BasePrice_vec(k) = basePrice;
-    Revenue_vec(k)   = PED.Total_Revenue;
-    Cost_vec(k)      = PED.Total_Cost;
-    PM_vec(k)        = PED.PM;
+Revenue_vec(k)   = PED.Total_Revenue;
+TotalCost_vec(k) = PED.Total_Cost;
+PM_vec(k)        = PED.PM;
+
+FixedCost_vec(k) = sum(C_FIX_vec) + sum(C_OandM_vec);
+VarCost_vec(k)   = PED.Total_Cost - FixedCost_vec(k);
 
 end
 
@@ -155,12 +160,70 @@ end
 T = table( ...
     batterySizes', ...
     BasePrice_vec, ...
+    FixedCost_vec, ...
+    VarCost_vec, ...
+    TotalCost_vec, ...
     Revenue_vec, ...
-    Cost_vec, ...
     PM_vec, ...
     'VariableNames', ...
-    {'BESS_kWh','BasePrice','Revenue','Cost','ProfitMargin'});
+{'BESS_kWh', ...
+ 'EV_PRICE', ...
+ 'Fixed_Cost', ...
+ 'Variable_Cost', ...
+ 'Total_Cost', ...
+ 'Revenue', ...
+ 'PM'});
 
 writetable(T,'PED_DPM_BESS_Results.xlsx');
 
 disp('✔ PED–DPM economic results exported');
+
+%% =========================================================
+% EXPORT DETAILED ECONOMIC RESULTS
+%% =========================================================
+outputFile = 'Fig7_PED_DPM.xlsx';
+
+if exist(outputFile,'file')
+   delete(outputFile);
+end
+
+Results_Table = table( ...
+   batterySizes', ...
+   BasePrice_vec, ...
+   Cost_vec, ...
+   Revenue_vec, ...
+   PM_vec, ...
+   'VariableNames', ...
+   {'BESS_kWh', ...
+    'BasePrice', ...
+    'Total_Cost', ...
+    'Revenue', ...
+    'PM'} );
+
+writetable(Results_Table, outputFile);
+
+disp('PED–DPM economic Excel file generated.');
+
+%% =========================================================
+% FIGURE – BASE PRICE VS BATTERY SIZE
+%% =========================================================
+figure;
+
+plot(batterySizes, BasePrice_vec, '-o','LineWidth',2);
+
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Optimal Base Price (Rs/kWh)');
+title('PED–DPM Optimal Base Price vs Battery Size');
+
+%% =========================================================
+% FIGURE – PROFIT MARGIN VS BATTERY
+%% =========================================================
+figure;
+
+plot(batterySizes, PM_vec, '-s','LineWidth',2);
+
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Profit Margin');
+title('PED–DPM Profit Margin vs Battery Size');
