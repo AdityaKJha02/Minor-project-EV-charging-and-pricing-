@@ -1,0 +1,178 @@
+%% =========================================================
+%% TAU-DRIVEN TOU MODELLING (MAIN SCRIPT)
+%% =========================================================
+
+clear; clc;
+
+%% ================================
+% FILE INPUTS
+%% ================================
+EV_file  = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+%% ================================
+% SETTINGS
+%% ================================
+base_price = 9.3;
+tou_prices = [0.6 1.0 1.5];   % off-mid-peak
+
+N_co = [8 5 2 5 4 5];
+
+nFCS = numel(sheetNames_EV);
+hours = (0:23)';
+
+%% =========================================================
+%% RUN TOU MODEL FOR ALL FCS
+%% =========================================================
+
+N_EV_all  = zeros(24,nFCS);
+E_EV_all  = zeros(24,nFCS);
+price_all = zeros(24,nFCS);
+
+totalEV = zeros(nFCS,1);
+
+for fcsID = 1:nFCS
+
+    [N_EV, N_int, E_EV, tau_h, ~, ~, price_h] = ...
+        compute_TOU_tauDriven( ...
+        RTP_file, ...
+        EV_file, sheetNames_EV, ...
+        fcsID, tou_prices, base_price);
+
+    N_EV_all(:,fcsID)  = N_int;
+    E_EV_all(:,fcsID)  = E_EV;
+    price_all(:,fcsID) = price_h;
+
+    totalEV(fcsID) = sum(N_int);
+
+end
+
+fprintf('\nAll FCS processed successfully.\n');
+
+%% =========================================================
+%% HOURLY WEIGHT CALCULATION
+%% =========================================================
+
+totalEV_allStations = sum(totalEV);
+
+weight_hourly_all = zeros(24,nFCS);
+
+for fcsID = 1:nFCS
+
+    w_old = N_EV_all(:,fcsID) ./ totalEV_allStations;
+
+    scale_factor = 9.88 / sum(w_old);
+
+    weight_hourly_all(:,fcsID) = w_old * scale_factor;
+
+end
+
+fprintf('Weight calculation complete.\n');
+
+%% =========================================================
+%% WRITE HOURLY WEIGHTS
+%% =========================================================
+
+weightFile = 'Hourly_EV_Weights_TOU.xlsx';
+
+for fcsID = 1:nFCS
+
+    T_weight = table(hours, weight_hourly_all(:,fcsID), ...
+        'VariableNames', {'Hour','Weight'});
+
+    writetable(T_weight, weightFile, ...
+        'Sheet', sprintf('FCS_%d',fcsID));
+
+end
+
+fprintf('Weight Excel file generated.\n');
+
+%% =========================================================
+%% EXPORT FULL RESULTS
+%% =========================================================
+
+outputFile = 'TOU_Detailed_Results_AllFCS.xlsx';
+
+if exist(outputFile,'file')
+    delete(outputFile);
+end
+
+for fcsID = 1:nFCS
+
+    N_TOU = N_EV_all(:,fcsID);
+    E_TOU = E_EV_all(:,fcsID);
+    price_h = price_all(:,fcsID);
+
+    P_TOU = E_TOU;    % 1-hour slot → kWh = kW
+
+    Revenue = price_h .* E_TOU;
+
+    Nco = N_co(fcsID);
+
+    Ports_used = min(Nco, N_TOU);
+
+    Port_list = strings(length(Ports_used),1);
+
+    for t = 1:length(Ports_used)
+
+        if Ports_used(t) > 0
+            idx = randperm(N_TOU(t), Ports_used(t));
+            Port_list(t) = strjoin(string(idx), ',');
+        else
+            Port_list(t) = "";
+        end
+
+    end
+
+    T = table( ...
+        hours, price_h, ...
+        N_TOU, ...
+        E_TOU, ...
+        P_TOU, ...
+        Revenue, ...
+        weight_hourly_all(:,fcsID), ...
+        'VariableNames', ...
+        {'Hour','Price_Rs_per_kWh', ...
+        'N_EV_TOU', ...
+        'E_EV_TOU_kWh', ...
+        'P_EV_TOU_kW', ...
+        'Revenue_Rs', ...
+        'Weight'} );
+
+    writetable(T, outputFile, ...
+        'Sheet', sprintf('FCS_%d',fcsID));
+
+end
+
+fprintf('Detailed results exported.\n');
+
+%% =========================================================
+%% ENERGY PLOT
+%% =========================================================
+
+figure;
+
+for fcsID = 1:nFCS
+
+    subplot(2,3,fcsID)
+
+    plot(hours,E_EV_all(:,fcsID),'-o','LineWidth',1.5)
+
+    xlabel('Hour')
+    ylabel('Energy (kWh)')
+    title(['FCS ',num2str(fcsID)])
+
+    grid on
+
+end
+
+sgtitle('Hourly TOU Energy — All FCS');
