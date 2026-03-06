@@ -1,0 +1,179 @@
+clc; clear; close all;
+
+%% ================================
+% FILE INPUTS
+%% ================================
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+EV_file  = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
+summary_file = 'EVFCS_FCS_Summary_fp (2).xlsx';
+
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+%% ================================
+% SETTINGS
+%% ================================
+base_price = 20;      % Rs/kWh
+nFCS = numel(sheetNames_EV);
+hours = (0:23)';
+
+%% ================================
+% PREALLOCATION
+%% ================================
+N_EV_hourly_all = zeros(24,nFCS);
+totalEV_day_all = zeros(nFCS,1);
+
+E_DPM_all = zeros(24,nFCS);
+E_FPM_all = zeros(24,nFCS);
+price_all = zeros(24,nFCS);
+
+%% ================================
+% RUN DPM FOR ALL FCS
+%% ================================
+for fcsID = 1:nFCS
+
+    [N_EV_DPM, N_EV_int, E_EV_DPM, E_EV_FPM, ...
+        tau_h, price_h, ~] = ...
+        compute_PED_DPM_sigmoid( ...
+        [], ...
+        RTP_file, ...
+        EV_file, sheetNames_EV, ...
+        summary_file, ...
+        fcsID, base_price);
+
+    % Store hourly EVs
+    N_EV_hourly_all(:,fcsID) = N_EV_int;
+    totalEV_day_all(fcsID)   = sum(N_EV_int);
+
+    % Store energies
+    E_DPM_all(:,fcsID) = E_EV_DPM;
+    E_FPM_all(:,fcsID) = E_EV_FPM;
+
+    % Store price
+    price_all(:,fcsID) = price_h;
+end
+    
+fprintf('\n=====================================\n');
+fprintf('All FCS processed successfully.\n');
+fprintf('=====================================\n');
+
+%% ================================
+% ✅ CORRECT WEIGHT CALCULATION
+% (From second script — hourly-based logic)
+%% ================================
+totalEV_allStations = sum(totalEV_day_all);
+
+%% ================================
+% WEIGHT CALCULATION (Per-FCS normalized to 9.88)
+%% ================================
+
+weight_hourly_all = zeros(24,nFCS);
+
+for fcsID = 1:nFCS
+    
+    % Old weight (based on global EV share)
+    w_old = N_EV_hourly_all(:,fcsID) ./ totalEV_allStations;
+    
+    % Scale so that sum of 24 hours = 9.88
+    scale_factor = 9.88 / sum(w_old);
+    
+    weight_hourly_all(:,fcsID) = w_old * scale_factor;
+    
+end
+
+fprintf('Hourly weight calculation completed (each FCS sums to 9.88).\n');
+
+%% ================================
+% WRITE HOURLY WEIGHTS TO EXCEL
+%% ================================
+weightFile = 'Hourly_EV_Weights_AllFCS.xlsx';
+
+for fcsID = 1:nFCS
+    
+    T_weight = table(hours, weight_hourly_all(:,fcsID), ...
+        'VariableNames', {'Hour','Weight'});
+    
+    writetable(T_weight, weightFile, ...
+        'Sheet', sprintf('FCS_%d',fcsID));
+end
+
+fprintf('Weight Excel file generated: %s\n', weightFile);
+
+%% ================================
+% EXPORT FULL RESULTS PER FCS
+%% ================================
+outputFile_full = 'PED_DPM_Full_Results_AllFCS.xlsx';
+
+for fcsID = 1:nFCS
+
+    T = table( ...
+        hours, ...
+        N_EV_hourly_all(:,fcsID), ...
+        E_FPM_all(:,fcsID), ...
+        E_DPM_all(:,fcsID), ...
+        weight_hourly_all(:,fcsID), ...
+        price_all(:,fcsID), ...
+        'VariableNames', ...
+        {'Hour', ...
+         'N_EV_DPM_int', ...
+         'E_EV_FPM_kWh', ...
+         'E_EV_DPM_kWh', ...
+         'Weight', ...
+         'Price_Rs_per_kWh'} );
+
+    writetable(T, outputFile_full, ...
+        'Sheet', sprintf('FCS_%d',fcsID));
+end
+
+fprintf('Full results Excel file generated.\n');
+
+%% ================================
+% PLOT ENERGY COMPARISON (2x3)
+%% ================================
+figure('Color','w','Position',[100 100 1200 700]);
+
+for fcsID = 1:nFCS
+
+    subplot(2,3,fcsID)
+    plot(hours, E_FPM_all(:,fcsID), '-o','LineWidth',1.5); hold on;
+    plot(hours, E_DPM_all(:,fcsID), '-s','LineWidth',1.5);
+
+    xlabel('Hour');
+    ylabel('Energy (kWh)');
+    title(['FCS ', num2str(fcsID)]);
+    legend('FPM','DPM','Location','best');
+    grid on;
+end
+
+sgtitle('Hourly Energy Comparison — All FCS');
+
+saveas(gcf,'Energy_Comparison_AllFCS.png');
+
+fprintf('Energy comparison image saved.\n');
+
+%% ================================
+% OPTIONAL: Power + Price Plot (FCS 1 example)
+%% ================================
+selectedFCS = 1;
+
+figure('Color','w');
+
+yyaxis left
+plot(hours, E_FPM_all(:,selectedFCS), '-o','LineWidth',2); hold on
+plot(hours, E_DPM_all(:,selectedFCS), '-s','LineWidth',2);
+ylabel('Power (kW)')
+
+yyaxis right
+plot(hours, price_all(:,selectedFCS), '-','LineWidth',2);
+ylabel('Price (Rs/kWh)')
+
+xlabel('Hour of Day')
+title(sprintf('Hourly Power & DPM Price — FCS %d', selectedFCS))
+legend('FPM Power','DPM Power','DPM Price','Location','northwest')
+grid on
