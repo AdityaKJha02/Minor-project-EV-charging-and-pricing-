@@ -32,6 +32,14 @@ sheetNames_PV = {
 };
 
 nFCS = numel(sheetNames_EV);
+% Storage for ALL iterations (Excel table)
+BESS_all   = [];
+Price_all  = [];
+Fix_all    = [];
+Var_all    = [];
+Tot_all    = [];
+Rev_all    = [];
+PM_all     = [];
 
 N_co = [8 5 2 5 4 5];
 SOC_init_vec = [50 55 50 55 50 60];
@@ -43,6 +51,7 @@ params.RTP_file     = RTP_file;
 params.EV_file      = EV_file;
 params.sheetNames_EV = sheetNames_EV;
 params.summary_file = 'EVFCS_FCS_Summary_fp (2).xlsx';
+
 %% =========================================================
 % AREA + PV
 %% =========================================================
@@ -67,7 +76,7 @@ end
 %% =========================================================
 % BATTERY SWEEP
 %% =========================================================
-batterySizes = 1200:400:3000;
+batterySizes = 1200:400:2000;
 nB = numel(batterySizes);
 
 BasePrice_vec  = zeros(nB,1);
@@ -89,15 +98,18 @@ params.dt      = 1/6;
 % PED PARAMETERS (same logic as FPM)
 %% =========================================================
 params.PM_DES       = 0.25;
-params.basePrice0   = 08.5;
+params.basePrice0   = 010;
 params.basePriceMax = 30;
-params.deltaPrice   = 0.5;
+params.deltaPrice   = 0.1;
 
 %% =========================================================
 % MAIN LOOP
 %% =========================================================
+%% =========================================================
+% MAIN LOOP (Same structure as FPM)
+%% =========================================================
+
 for k = 1:nB
-%% 
 
     batterySize = batterySizes(k);
 
@@ -105,78 +117,86 @@ for k = 1:nB
 
     battery_vec = batterySize * ones(1,nFCS);
 
-    % Fixed costs
+    % ------------------------------
+    % Fixed Cost
+    % ------------------------------
     C_FIX_vec   = Cd_fixcost_FPM(battery_vec, N_co, beta_SS, N_pv);
     C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
 
     params.C_FIX   = C_FIX_vec;
     params.C_OandM = C_OandM_vec;
+    params.E_BESS  = batterySize;
 
-    %% --------------------------------
-    % BSA
-    %% --------------------------------
+    % ------------------------------
+    % BSA (Battery Scheduling)
+    % ------------------------------
     BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
         sheetNames_EV, sheetNames_PV, ...
         batterySize, SOC_init_vec, CD_factor_vec);
 
+    % Generate BSA Excel
     BSA_step5_generateExcel(BSA, BSA_excel);
 
-    %% --------------------------------
-    % BASE PRICE SEARCH (FPM STYLE)
-    %% --------------------------------
-    basePrice = params.basePrice0;
+    % ------------------------------
+    % Run PED–DPM pricing optimisation
+    % (PRICE SEARCH INSIDE FUNCTION)
+    % ------------------------------
+    PED = PED_DPM_from_BSA_Excel(params, BSA_excel, PED_excel);
 
-    while basePrice <= params.basePriceMax
+    % ------------------------------
+    % Store outputs
+    % ------------------------------
+    BasePrice_vec(k) = PED.basePrice;
+    Revenue_vec(k)   = PED.Total_Revenue;
+    TotalCost_vec(k) = PED.Total_Cost;
+    PM_vec(k)        = PED.PM;
 
-        params.basePrice = basePrice;
-
-        PED = PED_DPM_from_BSA_Excel(params, ...
-                                     BSA_excel, ...
-                                     PED_excel);
-
-        if PED.PM >= params.PM_DES
-            break
-        end
-
-        basePrice = basePrice + params.deltaPrice;
-
-    end
-
-    %% Store results
-    BasePrice_vec(k) = basePrice;
-Revenue_vec(k)   = PED.Total_Revenue;
-TotalCost_vec(k) = PED.Total_Cost;
-PM_vec(k)        = PED.PM;
-
-FixedCost_vec(k) = sum(C_FIX_vec) + sum(C_OandM_vec);
-VarCost_vec(k)   = PED.Total_Cost - FixedCost_vec(k);
+    FixedCost_vec(k) = sum(C_FIX_vec) + sum(C_OandM_vec);
+    VarCost_vec(k)   = PED.Total_Cost - FixedCost_vec(k);
 
 end
-
 %% =========================================================
 % SAVE RESULTS
 %% =========================================================
+outputFile = 'PED_DPM_BESS_Results.xlsx';
+
+if exist(outputFile,'file')
+    delete(outputFile);
+end
+
 T = table( ...
     batterySizes', ...
     BasePrice_vec, ...
+    Revenue_vec, ...
     FixedCost_vec, ...
     VarCost_vec, ...
     TotalCost_vec, ...
-    Revenue_vec, ...
     PM_vec, ...
     'VariableNames', ...
-{'BESS_kWh', ...
- 'EV_PRICE', ...
- 'Fixed_Cost', ...
- 'Variable_Cost', ...
- 'Total_Cost', ...
- 'Revenue', ...
- 'PM'});
+    {'Battery_kWh', ...
+     'BasePrice_Rs_per_kWh', ...
+     'Revenue_Rs', ...
+     'FixedCost_Rs', ...
+     'VariableCost_Rs', ...
+     'TotalCost_Rs', ...
+     'ProfitMargin'} );
 
-writetable(T,'PED_DPM_BESS_Results.xlsx');
+writetable(T, outputFile);
 
-disp('✔ PED–DPM economic results exported');
+disp('Excel file generated: PED_DPM_BESS_Results.xlsx');
+
+
+%% =========================================================
+% FIGURE – BASE PRICE VS BATTERY SIZE
+%% =========================================================
+figure;
+plot(batterySizes, BasePrice_vec, '-o','LineWidth',2);
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Base price (Rs/kWh)');
+title('Optimized Base Price vs Battery Size');
+
 
 %% =========================================================
 % EXPORT DETAILED ECONOMIC RESULTS
@@ -190,40 +210,86 @@ end
 Results_Table = table( ...
    batterySizes', ...
    BasePrice_vec, ...
-   Cost_vec, ...
+   FixedCost_vec, ...
+   VarCost_vec, ...
+   TotalCost_vec, ...
    Revenue_vec, ...
    PM_vec, ...
    'VariableNames', ...
    {'BESS_kWh', ...
-    'BasePrice', ...
+    'EV_PRICE', ...
+    'Fixed_Cost', ...
+    'Variable_Cost', ...
     'Total_Cost', ...
     'Revenue', ...
     'PM'} );
 
 writetable(Results_Table, outputFile);
 
-disp('PED–DPM economic Excel file generated.');
 
 %% =========================================================
-% FIGURE – BASE PRICE VS BATTERY SIZE
+% FIND OPTIMAL (MINIMUM BASE PRICE)
 %% =========================================================
-figure;
+[Price_min, idx_min] = min(BasePrice_vec);
 
-plot(batterySizes, BasePrice_vec, '-o','LineWidth',2);
+Fixed_opt   = FixedCost_vec(idx_min);
+Var_opt     = VarCost_vec(idx_min);
+Total_opt   = TotalCost_vec(idx_min);
+Revenue_opt = Revenue_vec(idx_min);
+PM_opt      = PM_vec(idx_min);
 
-grid on;
-xlabel('Battery capacity (kWh)');
-ylabel('Optimal Base Price (Rs/kWh)');
-title('PED–DPM Optimal Base Price vs Battery Size');
 
 %% =========================================================
-% FIGURE – PROFIT MARGIN VS BATTERY
+% LEAVE 2 ROWS GAP AND WRITE OPTIMAL VALUES
 %% =========================================================
-figure;
+gapRow = height(Results_Table) + 4;
 
-plot(batterySizes, PM_vec, '-s','LineWidth',2);
+OptimalSummary = {
+   'BESS_kWh',        batterySizes(idx_min);
+   'EV_PRICE',        Price_min;
+   'Fixed_Cost',      Fixed_opt;
+   'Variable_Cost',   Var_opt;
+   'Total_Cost',      Total_opt;
+   'Revenue',         Revenue_opt;
+   'PM',              PM_opt
+};
 
-grid on;
-xlabel('Battery capacity (kWh)');
-ylabel('Profit Margin');
-title('PED–DPM Profit Margin vs Battery Size');
+writecell(OptimalSummary, outputFile, ...
+   'Range', sprintf('A%d', gapRow));
+
+disp('PED–DPM economic Excel file generated successfully.');
+
+%% =========================================================
+% REGENERATE BSA FILE FOR OPTIMAL BATTERY SIZE (PED–DPM)
+%% =========================================================
+
+optimalBattery = batterySizes(idx_min);
+
+fprintf('\nRe-running BSA for optimal battery size = %d kWh (PED–DPM)\n', optimalBattery);
+
+% Recompute battery vector
+battery_vec_opt = optimalBattery * ones(1,nFCS);
+
+% Recompute fixed costs
+C_FIX_vec   = Cd_fixcost_FPM(battery_vec_opt, N_co, beta_SS, N_pv);
+C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
+
+% Update parameters
+params.C_FIX   = C_FIX_vec;
+params.C_OandM = C_OandM_vec;
+params.E_BESS  = optimalBattery;
+
+%% ------------------------------
+% Run BSA again
+%% ------------------------------
+BSA_opt = BSA_step1_step2( ...
+    EV_file, PV_file, RTP_file, ...
+    sheetNames_EV, sheetNames_PV, ...
+    optimalBattery, SOC_init_vec, CD_factor_vec);
+
+%% ------------------------------
+% Overwrite BSA Excel with optimal result
+%% ------------------------------
+BSA_step5_generateExcel(BSA_opt, BSA_excel);
+
+disp('✔ TEMP_BSA_PED.xlsx overwritten with optimal battery results');
