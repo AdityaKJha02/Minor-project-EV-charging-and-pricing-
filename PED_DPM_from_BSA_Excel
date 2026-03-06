@@ -37,7 +37,6 @@ fprintf('Number of fixed costs = %d\n', length(C_FIXED_TOTAL));
 [~, sheetNames] = xlsfinfo(BSA_excel);
 nFCS = numel(sheetNames);
 
-fprintf('Detected %d FCS sheets\n', nFCS);
 
 E_EV_slot   = cell(1,nFCS);
 E_GRID_slot = cell(1,nFCS);
@@ -55,23 +54,29 @@ for i = 1:nFCS
 
     fprintf('Matrix size = %d x %d\n', size(M,1), size(M,2));
 
-    P_EV = M(2:145,3);
-P_BC = M(2:145,5);
-P_BD = M(2:145,6);
+    % Extract 144 time slots (rows 2–145)
+    P_EV = M(:,3);
+    P_BC = M(:,5);
+    P_BD = M(:,6);
 
+    % Remove NaNs consistently
     valid = ~isnan(P_EV);
 
-    P_EV = P_EV(valid)/eta_EV;
+    P_EV = P_EV(valid);
     P_BC = P_BC(valid);
     P_BD = P_BD(valid);
 
     fprintf('Valid slots = %d\n', length(P_EV));
 
-    E_EV_h = P_EV * dt;
+    % Convert power → energy
+    E_EV_h = (P_EV/eta_EV) * dt;
     E_BC_h = P_BC * dt;
     E_BD_h = P_BD * dt;
 
+    % Grid energy
     E_GRID_h = E_EV_h + E_BC_h - E_BD_h;
+
+    % Prevent negative grid purchase
     E_GRID_h(E_GRID_h < 0) = 0;
 
     fprintf('Total EV energy = %.2f kWh\n', sum(E_EV_h));
@@ -138,7 +143,7 @@ while basePrice <= baseMax
 
         Ng = min(length(rho_PUR), length(E_GRID_h));
 
-        EnergyCost_i = sum( rho_PUR(1:Ng) .* E_GRID_h(1:Ng) );
+        EnergyCost_i = sum(rho_PUR(1:Ng) .* E_GRID_h(1:Ng) );
 
         fprintf('Energy cost FCS %d = %.2f\n', i, EnergyCost_i);
 
@@ -192,5 +197,9 @@ fprintf('Optimal base price       : %.3f\n', basePrice);
 fprintf('Total revenue            : %.2f\n', Total_Revenue);
 fprintf('Total cost               : %.2f\n', Total_Cost);
 fprintf('Achieved profit margin   : %.3f\n', PM);
-
+if PED.PM >= params.PM_DES
+    disp('✔ Desired profit margin achieved');
+else
+    disp('✘ Desired profit margin NOT achieved');
+end
 end
