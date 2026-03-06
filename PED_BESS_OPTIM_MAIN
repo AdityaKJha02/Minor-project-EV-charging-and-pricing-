@@ -190,13 +190,24 @@ disp('Excel file generated: PED_DPM_BESS_Results.xlsx');
 %% =========================================================
 % FIGURE – BASE PRICE VS BATTERY SIZE
 %% =========================================================
-figure;
+figure(1); clf;
+
 plot(batterySizes, BasePrice_vec, '-o','LineWidth',2);
+
 grid on;
 xlabel('Battery capacity (kWh)');
 ylabel('Base price (Rs/kWh)');
 title('Optimized Base Price vs Battery Size');
 
+
+figure(2); clf;
+
+plot(batterySizes, PM_vec, '-s','LineWidth',2);
+
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Profit Margin');
+title('PED–DPM Profit Margin vs Battery Size');
 
 %% =========================================================
 % EXPORT DETAILED ECONOMIC RESULTS
