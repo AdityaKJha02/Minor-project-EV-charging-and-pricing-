@@ -6,7 +6,6 @@ clc; clear; close all;
 EV_file     = 'EVFCS_10min_Arrival_Power_CPP_FINAL.xlsx';
 PV_file     = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file    = 'RTP_grid_cost_10min.xlsx';
-
 BSA_excel   = 'TEMP_BSA_CPP.xlsx';
 
 %% =========================================================
@@ -89,7 +88,7 @@ params.dt      = 1/6;
 % CPP PARAMETERS
 %% =========================================================
 params.PM_DES       = 0.25;
-params.basePrice0   = 8.65;
+params.basePrice0   = 8.65; % 8.68 at 1000 as on 07-03
 params.basePriceMax = 30;
 params.deltaPrice   = 0.01;
 
