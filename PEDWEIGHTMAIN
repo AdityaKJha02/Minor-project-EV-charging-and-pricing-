@@ -17,7 +17,7 @@ sheetNames_EV = {
     'EVFCS_6_10_15'
 };
 
-base_price = 20;
+base_price = 8.74;
 nFCS = 6;
 hours = (0:23)';
 
@@ -112,3 +112,5 @@ fprintf('\n========================================\n');
 fprintf('Results written to Excel\n');
 fprintf('File: %s\n',outputFile);
 fprintf('========================================\n');
+
+
