@@ -1,0 +1,114 @@
+clc; clear; close all;
+
+%% ================================
+% INPUT FILES
+%% ================================
+
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+EV_file  = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
+summary_file = 'EVFCS_FCS_Summary_fp (2).xlsx';
+
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+base_price = 20;
+nFCS = 6;
+hours = (0:23)';
+
+fprintf('\n========================================\n');
+fprintf('PED NORMALIZED HOURLY WEIGHT CALCULATION\n');
+fprintf('========================================\n');
+
+%% ================================
+% STORAGE
+%% ================================
+
+Nev_matrix = zeros(24,nFCS);   % 24 hours × 6 stations
+
+%% ================================
+% STEP 1: RUN PED FOR EACH STATION
+%% ================================
+
+for fcsID = 1:nFCS
+    
+    fprintf('\n----------------------------------------\n');
+    fprintf('Processing FCS %d\n',fcsID);
+    fprintf('----------------------------------------\n');
+    
+    [N_EV_DPM, ~, ~, ~, tau_h, ~, ~] = ...
+        compute_PED_DPM_sigmoid( ...
+        [], RTP_file, ...
+        EV_file, sheetNames_EV, ...
+        summary_file, ...
+        fcsID, base_price);
+    
+    Nev_matrix(:,fcsID) = N_EV_DPM;
+    
+    fprintf('Hourly DPM EVs for FCS %d:\n',fcsID);
+    disp(N_EV_DPM');
+    
+end
+
+%% ================================
+% STEP 2: TOTAL EV PER HOUR
+%% ================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 2: Hourly EV totals across stations\n');
+fprintf('========================================\n');
+
+N_hour = sum(Nev_matrix,2);
+
+for h = 1:24
+    fprintf('Hour %2d : Nev_total = %.4f\n',h-1,N_hour(h));
+end
+
+%% ================================
+% STEP 3: TOTAL EVs ALL HOURS
+%% ================================
+
+totalEV = sum(N_hour);
+
+fprintf('\n========================================\n');
+fprintf('STEP 3: Total EVs across all hours\n');
+fprintf('========================================\n');
+
+fprintf('Sum(N1..N24) = %.4f\n',totalEV);
+
+%% ================================
+% STEP 4: NORMALIZED WEIGHTS
+%% ================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 4: Normalized Hourly Weights\n');
+fprintf('========================================\n');
+
+W_hour = (N_hour * 9.88) / totalEV;
+
+for h = 1:24
+    fprintf('Hour %2d : Weight = %.6f\n',h-1,W_hour(h));
+end
+
+fprintf('\nCheck: Sum of weights = %.6f\n',sum(W_hour));
+
+%% ================================
+% STEP 5: EXPORT TO EXCEL
+%% ================================
+
+T = table(hours, N_hour, W_hour,...
+    'VariableNames',{'Hour','Total_EV','Normalized_Weight'});
+
+outputFile = 'PED_Normalized_Hourly_Weights.xlsx';
+
+writetable(T,outputFile);
+
+fprintf('\n========================================\n');
+fprintf('Results written to Excel\n');
+fprintf('File: %s\n',outputFile);
+fprintf('========================================\n');
