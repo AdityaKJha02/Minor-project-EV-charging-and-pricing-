@@ -1,4 +1,4 @@
-function [N_EV_DPM, N_EV_int, E_EV_DPM, E_EV_FPM_kWh, tau_h, price_h, kappa] = ...
+ function [N_EV_DPM, N_EV_int, E_EV_DPM, E_EV_FPM_kWh, tau_h, price_h, kappa] = ...
     compute_PED_DPM_sigmoid( ...
         timeGrid_min, RTP_file, ...
         EV_file, sheetNames_EV, ...
@@ -110,8 +110,8 @@ fprintf('Total FPM Energy = %.2f kWh\n', sum(E_EV_FPM_kWh));
 % ---------------------------
 m_min = 0.7;      % → ~7 Rs if base=10
 m_max = 1.3;      % → ~13 Rs if base=10
-beta  = 2;        % steepness
-tau0  = 0.5;      % midpoint
+beta  = 10;        % steepness
+tau0  = 0.6;      % midpoint
 
 multiplier = m_min + ...
     (m_max - m_min) ./ ...
@@ -125,169 +125,166 @@ fprintf('First 5 prices:\n');
 disp(price_h(1:5));
 
 %% ---------------------------
-% STEP 4: κ (normalization)
-% ---------------------------
-kappa = sum(N_EV_FPM) / sum(tau_h .* N_EV_FPM);
-fprintf('\nSTEP 4: Normalization\n');
-fprintf('kappa = %.4f\n', kappa);
+% STEP 4: Hourly EV arrivals (from 10-min data)
+%% ---------------------------
+
+N_EV_10min = zeros(144,1);
+
+for k = 1:144
+
+    N_EV_10min(k) = getEVcountAtTime( ...
+        EV_file, sheetNames_EV, fcsID, (k-1)*10);
+
+end
+
+% Convert to hourly arrivals
+N_EV_hour = reshape(N_EV_10min,6,24);
+
+N_EV_FPM = sum(N_EV_hour,1)';     % 24×1
+
+fprintf('\nSTEP 4: Hourly EV Arrivals (FPM)\n');
+fprintf('Total FPM EVs = %.2f\n', sum(N_EV_FPM));
+
 
 %% ---------------------------
-% STEP 5: DPM EV arrivals
-% ---------------------------
-gamma = 1.25;   
+% STEP 5: κ normalization
+%% ---------------------------
+
+kappa = sum(N_EV_FPM) / sum(tau_h .* N_EV_FPM);
+
+fprintf('\nSTEP 5: Normalization\n');
+fprintf('kappa = %.4f\n', kappa);
+
+
+%% ---------------------------
+% STEP 6: PED demand response
+%% ---------------------------
+
+gamma = 1;     % PED elasticity factor
 
 N_EV_DPM = kappa * (tau_h.^gamma) .* N_EV_FPM;
 
-%% ---------------------------
-% STEP 6: Normalize DPM EVs to Match Actual EV Count (A2)
-%% ---------------------------
+fprintf('\nSTEP 6: PED Demand Response\n');
+fprintf('Total DPM EVs (fractional) = %.2f\n', sum(N_EV_DPM));
 
-sheetName = sprintf('FCS_%d', fcsID);
-
-% Read actual unique EV count from summary file (A2)
-ev1 = readmatrix(summary_file, ...
-                 'Sheet', sheetName, ...
-                 'Range', 'A2');
-
-ev1 = ev1(1);   % force scalar
-
-if isempty(ev1) || any(isnan(ev1))
-    error('Num_EVs (A2) missing for FCS %d', fcsID);
-end
-
-evo = sum(N_EV_DPM);   % current DPM total (overcounted)
-
-% Normalize
-N_EV_DPM = N_EV_DPM * (ev1 / evo);
-
-fprintf('\nSTEP 6: EV Normalization\n');
-fprintf('Original DPM EV total (evo) = %.2f\n', evo);
-fprintf('Actual EV total from A2 (ev1) = %.2f\n', ev1);
-fprintf('New DPM EV total after normalization = %.2f\n', sum(N_EV_DPM));
 
 %% ---------------------------
-% STEP 7: Integerization (Hourly EVs)
-% ---------------------------
+% STEP 7: Integerization
+%% ---------------------------
+
 floorEV = floor(N_EV_DPM);
+
 residual = N_EV_DPM - floorEV;
+
 missing = round(sum(N_EV_DPM) - sum(floorEV));
 
 [~,idx] = sort(residual,'descend');
+
 N_EV_int = floorEV;
 N_EV_int(idx(1:missing)) = N_EV_int(idx(1:missing)) + 1;
 
-fprintf('\nSTEP 6: Integerization\n');
-fprintf('Total EVs (fractional) = %.2f\n', sum(N_EV_DPM));
-fprintf('Total EVs (integer)    = %d\n', sum(N_EV_int));
+fprintf('\nSTEP 7: Integerization\n');
+fprintf('Total EVs (integer) = %d\n', sum(N_EV_int));
 
 
 %% ---------------------------
+% STEP 8: Energy calculation
 %% ---------------------------
-% STEP 8: Compute Avg Energy per EV from Arrival Power File
+
+EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+
+% Extract 10-min charging power
+P_EV_10min = EV_temp(2:145,7);
+
+% Convert to hourly power
+P_reshaped = reshape(P_EV_10min,6,24);
+
+P_hourly = mean(P_reshaped,1)';   % 24×1
+
+E_EV_FPM_kWh = P_hourly;
+
+fprintf('\nSTEP 8: Hourly FPM Energy\n');
+fprintf('Total FPM Energy = %.2f kWh\n', sum(E_EV_FPM_kWh));
+
+
+%% ---------------------------
+% STEP 9: Average energy per EV
 %% ---------------------------
 
-% 10-min station power (Column G)
-P_10min = EV_temp(2:145,7);     % rows 2–145
-P_10min(isnan(P_10min)) = 0;
+E_avg = sum(E_EV_FPM_kWh) / max(sum(N_EV_FPM),1);
 
-% Total station power (sum of 10-min kW values)
-total_power_10min = sum(P_10min);
+fprintf('Average Energy per EV = %.4f kWh\n', E_avg);
 
-% Convert 10-min → hourly equivalent energy
-total_energy_equiv = total_power_10min / 6;
 
-% Total EV count over 10-min slots
-total_EVs_10min = sum(N_EV_10min);
+%% ---------------------------
+% STEP 10: DPM Energy
+%% ---------------------------
 
-if total_EVs_10min == 0
-    error('No EVs found in arrival file for FCS %d', fcsID);
-end
-
-% Average energy per EV
-E_avg = total_energy_equiv / total_EVs_10min;
-
-fprintf('\nSTEP 8: Avg Energy computed from Arrival File\n');
-fprintf('Total station power sum (10-min) = %.2f\n', total_power_10min);
-fprintf('Total EV appearances (10-min)    = %.2f\n', total_EVs_10min);
-fprintf('Computed Average Energy per EV   = %.4f kWh\n', E_avg);
-
-E_avg = E_avg(1);   % force scalar
-
-if isempty(E_avg) || any(isnan(E_avg))
-    error('Avg_Energy_kWh (J2) missing for FCS %d', fcsID);
-end
-
-% ---------------------------------
-% Hourly Energy and Power
-% ---------------------------------
-
-% Energy per hour (kWh)
 E_EV_DPM = N_EV_int .* E_avg;
-%% ---------------------------------
-% STEP 8B: Force Total Energy Equality
-%% ---------------------------------
 
-total_FPM = sum(E_EV_FPM_kWh);
-total_DPM = sum(E_EV_DPM);
+P_EV_DPM = E_EV_DPM;     % hourly slot
 
-if total_DPM == 0
-    error('Total DPM energy is zero — cannot scale.');
-end
-
-% Scaling factor
-energy_scale = total_FPM / total_DPM;
-
-% Scale hourly DPM energy
-E_EV_DPM = E_EV_DPM * energy_scale;
-
-fprintf('\nSTEP 8B: Energy Scaling Applied\n');
-fprintf('Total FPM Energy = %.4f kWh\n', total_FPM);
-fprintf('Total DPM Energy BEFORE scaling = %.4f kWh\n', total_DPM);
-fprintf('Scaling factor = %.6f\n', energy_scale);
-fprintf('Total DPM Energy AFTER scaling = %.4f kWh\n', sum(E_EV_DPM));
-% Since slot = 1 hour → Power = Energy
-P_EV_DPM = E_EV_DPM;   % kW
-
-fprintf('\nSTEP 7: Energy Using Average Energy per EV\n');
-fprintf('Average Energy per EV = %.2f kWh\n', E_avg);
-fprintf('Total DPM Energy      = %.2f kWh\n', sum(E_EV_DPM));
+fprintf('\nSTEP 10: DPM Energy\n');
+fprintf('Total DPM Energy = %.2f kWh\n', sum(E_EV_DPM));
 
 %% ---------------------------
-% STEP 9: Write Hourly Results to Excel (24 rows only)
-% ---------------------------
+% STEP 11: Export All Results to Excel
+%% ---------------------------
 
 hours = (0:23)';
 
-% Create table (24 rows only)
-T_export = table( ...
+% Recompute FPM arrivals for table (already calculated earlier)
+N_EV_10min = zeros(144,1);
+for k = 1:144
+    N_EV_10min(k) = getEVcountAtTime( ...
+        EV_file, sheetNames_EV, fcsID, (k-1)*10);
+end
+
+N_EV_hour = reshape(N_EV_10min,6,24);
+N_EV_FPM = sum(N_EV_hour,1)';
+
+% Hourly FPM power already calculated
+E_FPM = E_EV_FPM_kWh;
+
+% Fractional DPM EVs already available
+N_DPM_frac = N_EV_DPM;
+
+% Integerized EVs
+N_DPM_int = N_EV_int;
+
+% Energy results
+E_DPM = E_EV_DPM;
+
+% Replicate scalar κ
+kappa_vec = repmat(kappa,24,1);
+
+% Create table
+T_PED = table( ...
     hours, ...
     tau_h, ...
     price_h, ...
-    N_EV_DPM, ...
-    N_EV_int, ...
     N_EV_FPM, ...
-    E_EV_FPM_kWh, ...   % NEW COLUMN (after F)
-    E_EV_DPM, ...
-    P_EV_DPM, ...
+    N_DPM_frac, ...
+    N_DPM_int, ...
+    E_FPM, ...
+    E_DPM, ...
+    kappa_vec, ...
     'VariableNames', ...
-    {'Hour', ...
-     'tau_h', ...
-     'Price_new_Rs_per_kWh', ...
-     'N_EV_DPM_frac', ...
-     'N_EV_DPM_int', ...
-     'N_EV_FPM', ...
-     'E_EV_FPM_kWh', ...   % NEW
-     'E_EV_DPM_kWh', ...
-     'P_EV_DPM_kW'} );
+    {'Hour',...
+     'Tau_h',...
+     'Price_Rs_per_kWh',...
+     'N_EV_FPM',...
+     'N_EV_DPM_frac',...
+     'N_EV_DPM_int',...
+     'E_EV_FPM_kWh',...
+     'E_EV_DPM_kWh',...
+     'Kappa'});
 
-% Excel file name
-outputFile = 'PED_DPM_Hourly_AllFCS.xlsx';
+fprintf('\nSTEP 11: Exporting results to Excel\n');
 
-% Sheet name per FCS
-sheetNameExcel = sprintf('FCS_%d', fcsID);
+outputFile = 'PED_24Hour_Detailed_Results.xlsx';
+sheetName = sprintf('FCS_%d',fcsID);
 
-% Write 24 rows only
-writetable(T_export, outputFile, 'Sheet', sheetNameExcel);
+writetable(T_PED,outputFile,'Sheet',sheetName);
 
-fprintf('\nSTEP 8: Excel written (24 hourly rows only)\n');
-fprintf('Sheet: %s\n', sheetNameExcel);
+fprintf('Results written to %s | Sheet: %s\n',outputFile,sheetName);
