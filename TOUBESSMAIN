@@ -1,0 +1,237 @@
+clc; clear; close all;
+
+%% =========================================================
+% FILES
+%% =========================================================
+EV_file     = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
+PV_file     = 'PV_Results_6_NPV_10min.xlsx';
+RTP_file    = 'RTP_grid_cost_10min.xlsx';
+
+BSA_excel   = 'TEMP_BSA_TOU.xlsx';
+
+%% =========================================================
+% STATION CONFIG
+%% =========================================================
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+sheetNames_PV = {
+   'NPV_400'
+   'NPV_390'
+   'NPV_420'
+   'NPV_405'
+   'NPV_397'
+   'NPV_408'
+};
+
+nFCS = numel(sheetNames_EV);
+
+%% =========================================================
+% STORAGE
+%% =========================================================
+N_co = [8 5 2 5 4 5];
+
+SOC_init_vec = [50 55 50 55 50 50];   % one value per FCS
+CD_factor_vec = [1.44 1.58 3.13 1.49 1.67 1.61];
+
+%% =========================================================
+% PV AREA CALCULATION
+%% =========================================================
+PV_module_area = 2.584;
+
+A_fc = zeros(1,nFCS);
+
+for i = 1:nFCS
+    A_fc(i) = Area_calc(N_co(i));
+end
+
+N_pv = round(0.85 .* A_fc ./ PV_module_area);
+
+%% =========================================================
+% SUBSTATION CAPACITY
+%% =========================================================
+beta_SS = zeros(1,nFCS);
+
+for i = 1:nFCS
+    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{i});
+    beta_SS(i) = max(EV_temp(:,7));
+end
+
+%% =========================================================
+% BATTERY SWEEP
+%% =========================================================
+batterySizes = 500:100:3200;
+
+nB = numel(batterySizes);
+
+BasePrice_vec  = zeros(nB,1);
+FixedCost_vec  = zeros(nB,1);
+VarCost_vec    = zeros(nB,1);
+TotalCost_vec  = zeros(nB,1);
+Revenue_vec    = zeros(nB,1);
+PM_vec         = zeros(nB,1);
+
+%% =========================================================
+% RTP DATA
+%% =========================================================
+rtp = readmatrix(RTP_file);
+
+params.rho_PUR = rtp(2:145,2);
+params.dt      = 1/6;
+
+%% =========================================================
+% TOU PARAMETERS
+%% =========================================================
+params.PM_DES       = 0.25;
+params.basePrice0   = 9.70;
+params.basePriceMax = 30;
+params.deltaPrice   = 0.01;
+
+params.RTP_file      = RTP_file;
+params.EV_file       = EV_file;
+params.sheetNames_EV = sheetNames_EV;
+
+params.tou_prices = [0.6 1.0 1.5];
+
+%% =========================================================
+% MAIN LOOP
+%% =========================================================
+
+for k = 1:nB
+
+    batterySize = batterySizes(k);
+
+    fprintf('\nRunning TOU for BESS = %d kWh\n', batterySize);
+
+    battery_vec = batterySize * ones(1,nFCS);
+
+    %% --------------------------------
+    % FIXED COST
+    %% --------------------------------
+    C_FIX_vec   = Cd_fixcost_FPM(battery_vec, N_co, beta_SS, N_pv);
+    C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
+
+    params.C_FIX   = C_FIX_vec;
+    params.C_OandM = C_OandM_vec;
+    params.E_BESS  = batterySize;
+
+    %% --------------------------------
+    % BSA (Battery Scheduling)
+    %% --------------------------------
+    BSA = BSA_step1_step2( ...
+        EV_file, PV_file, RTP_file, ...
+        sheetNames_EV, sheetNames_PV, ...
+        batterySize, SOC_init_vec, CD_factor_vec);
+
+    %% Export BSA
+    BSA_step5_generateExcel(BSA, BSA_excel);
+
+    %% --------------------------------
+    % RUN TOU OPTIMISATION
+    %% --------------------------------
+    TOU = TOU_from_BSA_Excel(params, BSA_excel);
+
+    %% --------------------------------
+    % STORE RESULTS
+    %% --------------------------------
+    BasePrice_vec(k) = TOU.basePrice;
+    Revenue_vec(k)   = TOU.Total_Revenue;
+    TotalCost_vec(k) = TOU.Total_Cost;
+    PM_vec(k)        = TOU.PM;
+
+    FixedCost_vec(k) = sum(C_FIX_vec) + sum(C_OandM_vec);
+    VarCost_vec(k)   = TOU.Total_Cost - FixedCost_vec(k);
+
+end
+
+%% =========================================================
+% SAVE RESULTS
+%% =========================================================
+
+outputFile = 'TOU_BESS_Results.xlsx';
+
+if exist(outputFile,'file')
+    delete(outputFile);
+end
+
+T = table( ...
+    batterySizes', ...
+    BasePrice_vec, ...
+    Revenue_vec, ...
+    FixedCost_vec, ...
+    VarCost_vec, ...
+    TotalCost_vec, ...
+    PM_vec, ...
+    'VariableNames', ...
+    {'Battery_kWh', ...
+     'BasePrice_Rs_per_kWh', ...
+     'Revenue_Rs', ...
+     'FixedCost_Rs', ...
+     'VariableCost_Rs', ...
+     'TotalCost_Rs', ...
+     'ProfitMargin'} );
+
+writetable(T, outputFile);
+
+disp('Excel file generated: TOU_BESS_Results.xlsx');
+
+%% =========================================================
+% FIGURE – BASE PRICE VS BATTERY SIZE
+%% =========================================================
+figure(1); clf;
+
+plot(batterySizes, BasePrice_vec, '-o','LineWidth',2);
+
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Base price (Rs/kWh)');
+title('TOU Optimized Base Price vs Battery Size');
+
+%% =========================================================
+% FIGURE – PROFIT MARGIN
+%% =========================================================
+figure(2); clf;
+
+plot(batterySizes, PM_vec, '-s','LineWidth',2);
+
+grid on;
+xlabel('Battery capacity (kWh)');
+ylabel('Profit Margin');
+title('TOU Profit Margin vs Battery Size');
+
+%% =========================================================
+% FIND OPTIMAL
+%% =========================================================
+[Price_min, idx_min] = min(BasePrice_vec);
+
+fprintf('\nOptimal BESS = %d kWh\n', batterySizes(idx_min));
+fprintf('Minimum price = %.2f Rs/kWh\n', Price_min);
+
+%% =========================================================
+% REGENERATE BSA FOR OPTIMAL BESS
+%% =========================================================
+optimalBattery = batterySizes(idx_min);
+
+battery_vec_opt = optimalBattery * ones(1,nFCS);
+
+C_FIX_vec   = Cd_fixcost_FPM(battery_vec_opt, N_co, beta_SS, N_pv);
+C_OandM_vec = Cd_OandM_FPM(C_FIX_vec);
+
+params.C_FIX   = C_FIX_vec;
+params.C_OandM = C_OandM_vec;
+params.E_BESS  = optimalBattery;
+
+BSA_opt = BSA_step1_step2( ...
+    EV_file, PV_file, RTP_file, ...
+    sheetNames_EV, sheetNames_PV, ...
+    optimalBattery, SOC_init_vec, CD_factor_vec);
+
+BSA_step5_generateExcel(BSA_opt, BSA_excel);
+
+disp('✔ Optimal BSA regenerated');
