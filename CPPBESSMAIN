@@ -3,7 +3,7 @@ clc; clear; close all;
 %% =========================================================
 % FILES
 %% =========================================================
-EV_file     = 'EVFCS_10min_Arrival_Power_CPP (2).xlsx';
+EV_file     = 'EVFCS_10min_Arrival_Power_CPP_FINAL.xlsx';
 PV_file     = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file    = 'RTP_grid_cost_10min.xlsx';
 
@@ -66,7 +66,7 @@ end
 %% =========================================================
 % BATTERY SWEEP
 %% =========================================================
-batterySizes = 600:200:2200;
+batterySizes = 500:100:3000;
 
 nB = numel(batterySizes);
 
