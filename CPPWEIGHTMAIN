@@ -17,7 +17,7 @@ sheetNames_EV = {
 
 RTP_file = 'RTP_grid_cost_10min.xlsx';
 
-base_price = 10;
+base_price = 8.68;
 cpp_multiplier = 2;
 
 N_co = [8 5 2 5 4 5];
@@ -119,4 +119,140 @@ writetable(T,outputFile);
 fprintf('\n========================================\n');
 fprintf('Excel file generated successfully\n');
 fprintf('File: %s\n',outputFile);
+fprintf('========================================\n');
+
+%% =========================================================
+% STEP 6: EXPORT 24-HOUR CPP PRICING MECHANISM
+%% =========================================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 6: Export 24-Hour CPP Pricing Mechanism\n');
+fprintf('========================================\n');
+
+%% Recompute base tau from RTP
+
+M = readmatrix(RTP_file);
+
+time_min = M(:,1);
+rhoSELL  = M(:,3);
+
+valid = ~isnan(time_min) & ~isnan(rhoSELL);
+
+time_min = time_min(valid);
+rhoSELL  = rhoSELL(valid);
+
+hour_index = floor(time_min/60);
+
+rho_hourly = zeros(24,1);
+
+for h = 0:23
+    idx = hour_index==h;
+    rho_hourly(h+1) = mean(rhoSELL(idx));
+end
+
+inv_p = 1./rho_hourly;
+tau_base = inv_p./max(inv_p);
+
+%% CPP flag (1 = CPP hour)
+
+cpp_flag = zeros(24,1);
+cpp_flag(cpp_idx) = 1;
+
+%% Display table in console
+
+fprintf('\nHour  Tau_base  Tau_new  CPP_flag  Price\n');
+
+for h = 1:24
+    fprintf('%2d   %8.4f   %8.4f   %5d     %8.4f\n',...
+        h-1,tau_base(h),tau_new(h),cpp_flag(h),price_h(h));
+end
+
+%% Create table for Excel
+
+T_price = table( ...
+    hours, ...
+    tau_base, ...
+    tau_new, ...
+    cpp_flag, ...
+    price_h, ...
+    'VariableNames', ...
+    {'Hour','Tau_Base','Tau_CPP','CPP_Flag','Price_Rs_per_kWh'});
+
+priceFile = 'CPP_24Hour_Pricing_Mechanism.xlsx';
+
+writetable(T_price,priceFile);
+
+fprintf('\n========================================\n');
+fprintf('CPP pricing mechanism exported\n');
+fprintf('File: %s\n',priceFile);
+fprintf('========================================\n');
+
+
+%% =========================================================
+% STEP 6: EXPORT COMPLETE CPP RESULTS (24 HOURS)
+%% =========================================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 6: Export Complete CPP Results\n');
+fprintf('========================================\n');
+
+outputFile2 = 'CPP_24Hour_All_Results.xlsx';
+
+if exist(outputFile2,'file')
+    delete(outputFile2);
+end
+
+for fcsID = 1:nFCS
+    
+    fprintf('\nProcessing detailed results for FCS %d\n',fcsID);
+    
+    [N_EV_CPP, N_EV_int, E_EV_CPP, tau_new, kappa, cpp_idx, price_h] = ...
+        compute_CPP_tauDriven( ...
+        RTP_file, ...
+        EV_file, sheetNames_EV, ...
+        fcsID, cpp_multiplier, base_price);
+    
+    %% CPP flag vector
+    
+    cpp_flag = zeros(24,1);
+    cpp_flag(cpp_idx) = 1;
+    
+    %% replicate scalar values
+    
+    kappa_vec = repmat(kappa,24,1);
+    
+    %% create table
+    
+    T_CPP = table( ...
+        hours, ...
+        tau_new, ...
+        price_h, ...
+        cpp_flag, ...
+        N_EV_CPP, ...
+        N_EV_int, ...
+        E_EV_CPP, ...
+        kappa_vec, ...
+        'VariableNames', ...
+        {'Hour',...
+         'Tau_CPP',...
+         'Price_Rs_per_kWh',...
+         'CPP_Flag',...
+         'N_EV_CPP_frac',...
+         'N_EV_CPP_int',...
+         'E_EV_CPP_kWh',...
+         'Kappa'});
+    
+    %% write sheet
+    
+    sheetName = sprintf('FCS_%d',fcsID);
+    
+    writetable(T_CPP,outputFile2,'Sheet',sheetName);
+    
+    fprintf('Sheet written: %s\n',sheetName);
+    
+end
+
+fprintf('\n========================================\n');
+fprintf('Detailed CPP Excel file generated\n');
+fprintf('File: %s\n',outputFile2);
 fprintf('========================================\n');
