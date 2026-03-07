@@ -1,0 +1,122 @@
+clc; clear; close all;
+
+%% ================================
+% SETTINGS
+%% ================================
+
+EV_file  = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
+
+sheetNames_EV = {
+    'EVFCS_1_6_2'
+    'EVFCS_2_24_21'
+    'EVFCS_3_15_22'
+    'EVFCS_4_13_12'
+    'EVFCS_5_7_18'
+    'EVFCS_6_10_15'
+};
+
+RTP_file = 'RTP_grid_cost_10min.xlsx';
+
+base_price = 10;
+cpp_multiplier = 2;
+
+N_co = [8 5 2 5 4 5];
+
+nFCS = numel(sheetNames_EV);
+hours = (0:23)';
+
+fprintf('\n========================================\n');
+fprintf('CPP HOURLY WEIGHT GENERATION\n');
+fprintf('========================================\n');
+
+%% ================================
+% STORAGE
+%% ================================
+
+Nev_matrix = zeros(24,nFCS);
+
+%% ================================
+% STEP 1: RUN CPP MODEL FOR EACH FCS
+%% ================================
+
+for fcsID = 1:nFCS
+    
+    fprintf('\n----------------------------------------\n');
+    fprintf('Running CPP Model for FCS %d\n',fcsID);
+    fprintf('Number of chargers = %d\n',N_co(fcsID));
+    fprintf('----------------------------------------\n');
+    
+    [N_EV_CPP, ~, ~, tau_new, kappa, cpp_idx, price_h] = ...
+        compute_CPP_tauDriven( ...
+        RTP_file, ...
+        EV_file, sheetNames_EV, ...
+        fcsID, cpp_multiplier, base_price);
+    
+    Nev_matrix(:,fcsID) = N_EV_CPP;
+    
+    fprintf('CPP hours for FCS %d: ',fcsID);
+    fprintf('%d ', cpp_idx-1);
+    fprintf('\n');
+    
+    fprintf('Hourly EV arrivals after CPP response:\n');
+    disp(N_EV_CPP');
+    
+end
+
+%% ================================
+% STEP 2: TOTAL EVs PER HOUR
+%% ================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 2: Hourly EV Totals (All Stations)\n');
+fprintf('========================================\n');
+
+N_hour = sum(Nev_matrix,2);
+
+for h = 1:24
+    fprintf('Hour %02d : N_h = %.4f EVs\n',h-1,N_hour(h));
+end
+
+%% ================================
+% STEP 3: TOTAL EVs IN DAY
+%% ================================
+
+totalEV = sum(N_hour);
+
+fprintf('\n========================================\n');
+fprintf('STEP 3: Total EVs Across Day\n');
+fprintf('========================================\n');
+
+fprintf('Total EVs across all hours = %.4f\n',totalEV);
+
+%% ================================
+% STEP 4: NORMALIZED WEIGHTS
+%% ================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 4: Compute Normalized Hourly Weights\n');
+fprintf('========================================\n');
+
+W_hour = (N_hour * 9.88) / totalEV;
+
+for h = 1:24
+    fprintf('Hour %02d : Weight = %.6f\n',h-1,W_hour(h));
+end
+
+fprintf('\nCheck: Sum of weights = %.6f (should be 9.88)\n',sum(W_hour));
+
+%% ================================
+% STEP 5: EXPORT TO EXCEL
+%% ================================
+
+T = table(hours, N_hour, W_hour,...
+    'VariableNames',{'Hour','Total_EV','Normalized_Weight'});
+
+outputFile = 'CPP_Hourly_EV_Weights_AllFCS.xlsx';
+
+writetable(T,outputFile);
+
+fprintf('\n========================================\n');
+fprintf('Excel file generated successfully\n');
+fprintf('File: %s\n',outputFile);
+fprintf('========================================\n');
