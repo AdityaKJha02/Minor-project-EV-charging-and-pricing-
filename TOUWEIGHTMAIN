@@ -20,7 +20,7 @@ sheetNames_EV = {
 % SETTINGS
 %% ================================
 
-base_price = 9.3;
+base_price = 9.58;
 tou_prices = [0.6 1.0 1.5];   % OFF MID PEAK multipliers
 
 N_co = [8 5 2 5 4 5];
@@ -118,4 +118,89 @@ writetable(T,outputFile);
 fprintf('\n========================================\n');
 fprintf('Excel file generated successfully\n');
 fprintf('File: %s\n',outputFile);
+fprintf('========================================\n');
+
+
+%% =========================================================
+% STEP 6: EXPORT COMPLETE TOU 24-HOUR RESULTS
+%% =========================================================
+
+fprintf('\n========================================\n');
+fprintf('STEP 6: Export Complete TOU Results\n');
+fprintf('========================================\n');
+
+outputFile2 = 'TOU_24Hour_Detailed_Results.xlsx';
+
+for fcsID = 1:nFCS
+    
+    fprintf('\nProcessing detailed table for FCS %d\n',fcsID);
+    
+    %% --- Run function again to capture outputs
+    
+    [N_EV_TOU, N_EV_int, E_EV_TOU, tau_h, kappa, bounds, price_h] = ...
+        compute_TOU_tauDriven( ...
+        RTP_file, ...
+        EV_file, sheetNames_EV, ...
+        fcsID, tou_prices, base_price);
+    
+    %% --- Recompute baseline arrivals
+    
+    N_EV_10min = zeros(144,1);
+    
+    for k = 1:144
+        N_EV_10min(k) = getEVcountAtTime( ...
+            EV_file, sheetNames_EV, fcsID, (k-1)*10);
+    end
+    
+    N_EV_hour = reshape(N_EV_10min,6,24);
+    N_FPM = sum(N_EV_hour,1)';
+    
+    %% --- Compute tau_new again
+    
+    inv_price = 1 ./ price_h;
+    tau_new = inv_price ./ max(inv_price);
+    
+    %% --- Energy baseline
+    
+    EV_temp = readmatrix(EV_file,'Sheet',sheetNames_EV{fcsID});
+    
+    P_EV_10min = EV_temp(2:145,7);
+    
+    P_reshaped = reshape(P_EV_10min,6,24);
+    
+    P_hourly = mean(P_reshaped,1)';
+    
+    E_FPM_hour = P_hourly;
+    
+    %% --- Create table
+    
+    T_detail = table( ...
+        hours, ...
+        tau_h, ...
+        tau_new, ...
+        price_h, ...
+        N_FPM, ...
+        N_EV_TOU, ...
+        N_EV_int, ...
+        E_FPM_hour, ...
+        E_EV_TOU, ...
+        'VariableNames', ...
+        {'Hour',...
+         'Tau_Base',...
+         'Tau_TOU',...
+         'Price_Rs_per_kWh',...
+         'N_EV_FPM',...
+         'N_EV_TOU_frac',...
+         'N_EV_TOU_int',...
+         'E_EV_FPM_kWh',...
+         'E_EV_TOU_kWh'});
+    
+    sheetName = sprintf('FCS_%d',fcsID);
+    writetable(T_detail,outputFile2,'Sheet',sheetName);
+    
+end
+
+fprintf('\n========================================\n');
+fprintf('Detailed TOU Excel file generated\n');
+fprintf('File: %s\n',outputFile2);
 fprintf('========================================\n');
