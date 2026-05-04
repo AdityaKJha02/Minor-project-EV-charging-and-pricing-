@@ -2,7 +2,7 @@
 %% =========================================================
 % INPUT FILES
 % =========================================================
-EV_file  = 'EVFCS_10min_Arrival_Power.xlsx';
+EV_file     = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
 PV_file  = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file = 'RTP_grid_cost_10min.xlsx';
 
@@ -17,6 +17,7 @@ sheetNames_EV = {
     'EVFCS_5_7_18'
     'EVFCS_6_10_15'
 };
+
 
 sheetNames_PV = { ...
     'NPV_400', ...
@@ -45,7 +46,7 @@ batterySize = 1500;  % kWh
 % USER INPUT PARAMETERS
 % =========================================================
 
-SOC_init_vec = [50 55 70 55 60 60];   % one value per FCS
+SOC_init_vec = [50 55 50 55 50 50];   % one value per FCS
 CD_factor_vec = [1.44 1.58 3.13 1.49 1.67 1.61];
 BSA = BSA_step1_step2( ...
         EV_file, PV_file, RTP_file, ...
@@ -238,3 +239,37 @@ for i = 1:nFCS
              'SOC_max = %.2f %% | SOC_min = %.2f %%\n'], ...
              i, SOC_start, SOC_end, SOC_max_day, SOC_min_day);
 end
+
+%% =========================================================
+% EXPORT SOC CURVES OF ALL 6 STATIONS TO EXCEL
+%% =========================================================
+
+socExcel = 'BSA_SOC_Curves_10min.xlsx';
+
+% Delete old file if it exists
+if exist(socExcel,'file')
+    delete(socExcel);
+end
+
+time_min = (0:10:1430)';    % 144 slots
+time_hr  = time_min/60;
+
+for i = 1:nFCS
+    
+    SOC_curve = BSA.SOC{i}(1:end-1);   % remove extra final point
+    
+    T = table( ...
+        time_min, ...
+        time_hr, ...
+        SOC_curve, ...
+        'VariableNames', ...
+        {'Time_min','Time_hr','SOC_percent'} );
+    
+    sheetName = sprintf('FCS_%d', i);
+    
+    writetable(T, socExcel, ...
+        'Sheet', sheetName, ...
+        'Range','A1');
+end
+
+fprintf('✔ SOC curves exported to Excel: %s\n', socExcel);
