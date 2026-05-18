@@ -277,7 +277,95 @@ fprintf('------------------------------------------------------------\n');
 
 generateEVFCSArrivalAndPowerTimeline_10min( ...
     EVevents, chosenEdges, portsPerStation, battery_kWh);
+% =========================================================
+% SHIFT EXCEL SHEETS TO FIRST NON-ZERO POWER ROW
+% =========================================================
 
+filename = 'EVFCS_10min_Arrival_Power.xlsx';
+
+sheetNames_EV = cell(size(chosenEdges,1),1);
+
+% Generate sheet names automatically
+for s = 1:size(chosenEdges,1)
+
+    sheetNames_EV{s} = sprintf('EVFCS_%d_%d_%d', ...
+        s, chosenEdges(s,1), chosenEdges(s,2));
+
+end
+
+for s = 1:length(sheetNames_EV)
+
+    sheet = sheetNames_EV{s};
+
+    % Read complete sheet
+    data = readcell(filename,'Sheet',sheet);
+
+    % Column G = StationPower_kW
+    colG = 7;
+
+    firstRow = [];
+
+    % -----------------------------------------------------
+    % Find first non-zero power row
+    % -----------------------------------------------------
+    for r = 2:size(data,1)
+
+        val = data{r,colG};
+
+        if isnumeric(val) && ~isnan(val) && val ~= 0
+
+            firstRow = r;
+            break
+
+        end
+    end
+
+    % -----------------------------------------------------
+    % Shift data upward
+    % -----------------------------------------------------
+    if ~isempty(firstRow)
+
+        header = data(1,:);
+
+        shiftedData = data(firstRow:end,:);
+
+        data = [header; shiftedData];
+
+    end
+
+    % -----------------------------------------------------
+    % Regenerate time axis
+    % -----------------------------------------------------
+    n = size(data,1) - 1;
+
+    time_min = (0:10:(n-1)*10)';
+
+    hour   = mod(floor(time_min/60),24);
+    minute = mod(time_min,60);
+
+    data(2:end,1) = num2cell(hour);
+    data(2:end,2) = num2cell(minute);
+    data(2:end,3) = num2cell(time_min);
+
+    % -----------------------------------------------------
+    % Fix missing values
+    % -----------------------------------------------------
+    for i = 1:numel(data)
+
+        if ismissing(data{i})
+            data{i} = [];
+
+        end
+    end
+
+    % -----------------------------------------------------
+    % Write shifted sheet back
+    % -----------------------------------------------------
+    writecell(data, filename, 'Sheet', sheet);
+
+end
+
+disp('Shifted EVFCS Excel sheets generated successfully.');
 %% =========================================================
 %% 12(b) Complete data
 %% =========================================================
