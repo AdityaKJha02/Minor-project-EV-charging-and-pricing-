@@ -1,4 +1,3 @@
-
 clc;
 clear;
 
@@ -7,7 +6,7 @@ clear;
 % =====================================================
 markup_factor=0.30
 
-EVH_filename='EVFCS_10min_Arrival_Power'
+EVH_filename='EVFCS_10min_Arrival_Power.xlsx'
 
 filename  = 'RTP_grid_cost_10min.xlsx';
 sheetName1 = 'EVFCS_1_6_2';              % Sheet index or name
@@ -53,38 +52,8 @@ n = 15;        % Loan duration (years)
 % =====================================================
 % BCS DATA (6 STATIONS)
 % =====================================================
-N_co = [8 5 2 5 4 5];                 % No. of chargers
-EVH_filename = 'EVFCS_10min_Arrival_Power.xlsx';
-
-sheetNames = {
-    'EVFCS_1_6_2'
-    'EVFCS_2_24_21'
-    'EVFCS_3_15_22'
-    'EVFCS_4_13_12'
-    'EVFCS_5_7_18'
-    'EVFCS_6_10_15'
-};
-
-nFCS = numel(sheetNames);
-beta_SS = zeros(1,nFCS);
-
-for i = 1:nFCS
-    
-    % Read full sheet
-    M = readmatrix(EVH_filename, 'Sheet', sheetNames{i});
-    
-    % Column G = 7th column
-    colG = M(:,7);
-    
-    % Remove NaNs
-    colG = colG(~isnan(colG));
-    
-    % Take maximum
-    beta_SS(i) = max(colG);
-    
-    fprintf('FCS %d | beta_SS = %.2f kW\n', i, beta_SS(i));
-    
-end
+N_co =  [8 5 2 5 4 5];                 % No. of chargers
+beta_SS = [539.51, 336.98, 68.08, 335.28, 268.90, 333.58];  % Peak load (kW)
 
 % Area calculation
 A_fc = zeros(1, length(N_co));
@@ -95,9 +64,9 @@ end
 % =====================================================
 % CONSTANT COST PARAMETERS
 % =====================================================
-U_L   = 40000/(12*n);    % Rs/m^2
-U_BDG = 100000/(12*n);   % Rs/charger
-U_SS  = 200000/(12*n);    % Rs/kW
+U_L   = 40000/(12*n);    % Rs/m^2/day
+U_BDG = 100000/(12*n);   % Rs/charger/day
+U_SS  = 200000/(12*n);    % Rs/kW/day
 
 
 % =====================================================
@@ -162,54 +131,63 @@ disp(rho_h)
 
 
 % =====================================================
-% GENERATE EXCEL FILE WITH Cd, REVENUE & PROFIT MARGIN
-% 6 SHEETS (ONE PER EVFCS)
+% FINAL EXCEL EXPORT (SINGLE SHEET ONLY)
+% Removes old EVFCS_1 ... EVFCS_6 sheets safely
 % =====================================================
 
 outputFile = 'EVFCS_Daily_Cost_Revenue_Profit.xlsx';
+sheetName  = 'All_EVFCS';
 
-for i = 1:length(N_co)
-
-    % ---------------------------------
-    % Calculate profit margin
-    % ---------------------------------
-    PM = Profitm_bcs(RD(i), Cd(i));
-
-    % ---------------------------------
-    % Create table for EVFCS i
-    % ---------------------------------
-    EVFCS_ID          = i;
-    No_of_Chargers    = N_co(i);
-    Daily_Cost_Rs    = Cd(i);
-    Daily_Revenue_Rs = RD(i);
-    Profit_Margin_percent = PM;
-
-    Results_Table = table( ...
-        EVFCS_ID, ...
-        No_of_Chargers, ...
-        Daily_Cost_Rs, ...
-        Daily_Revenue_Rs, ...
-        Profit_Margin_percent, ...
-        'VariableNames', ...
-        {'EVFCS_ID', 'No_of_Chargers', ...
-         'Daily_Cost_Rs', 'Daily_Revenue_Rs', ...
-         'Profit_Margin_percent'} ...
-    );
-
-    % ---------------------------------
-    % Sheet name
-    % ---------------------------------
-    sheetName = ['EVFCS_', num2str(i)];
-
-    % ---------------------------------
-    % Write to Excel
-    % ---------------------------------
-    writetable(Results_Table, outputFile, 'Sheet', sheetName);
-
+% -----------------------------------------------------
+% STEP 1: Delete old file completely (CLEANEST METHOD)
+% -----------------------------------------------------
+if isfile(outputFile)
+    delete(outputFile);   % removes all old sheets safely
 end
 
+% -----------------------------------------------------
+% STEP 2: Prepare data (NO variable name changes)
+% -----------------------------------------------------
+EVFCS_ID              = (1:length(N_co))';
+No_of_Chargers        = N_co(:);
+Daily_Cost_Rs         = Cd(:);
+Daily_Revenue_Rs      = RD(:);
+Profit_Margin_percent = PM(:);
+
+% -----------------------------------------------------
+% STEP 3: Create results table
+% -----------------------------------------------------
+Results_Table = table( ...
+    EVFCS_ID, ...
+    No_of_Chargers, ...
+    Daily_Cost_Rs, ...
+    Daily_Revenue_Rs, ...
+    Profit_Margin_percent, ...
+    'VariableNames', { ...
+        'EVFCS_ID', ...
+        'No_of_Chargers', ...
+        'Daily_Cost_Rs', ...
+        'Daily_Revenue_Rs', ...
+        'Profit_Margin_percent'} ...
+);
+
+% -----------------------------------------------------
+% STEP 4: Write to Excel (SINGLE SHEET)
+% -----------------------------------------------------
+writetable(Results_Table, outputFile, 'Sheet', sheetName);
+
+% -----------------------------------------------------
+% DONE
+% -----------------------------------------------------
 disp('--------------------------------------------------');
 disp('Excel file generated successfully!');
-disp(['File name: ', outputFile]);
-disp('Sheets: EVFCS_1 to EVFCS_6');
+disp(['File name : ', outputFile]);
+disp(['Sheet     : ', sheetName]);
 disp('--------------------------------------------------');
+
+
+
+
+
+
+
