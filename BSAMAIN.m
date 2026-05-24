@@ -2,7 +2,7 @@
 %% =========================================================
 % INPUT FILES
 % =========================================================
-EV_file     = 'EVFCS_10min_Arrival_Power_fp (3).xlsx';
+EV_file     = 'EVFCS_10min_Arrival_Power.xlsx';
 PV_file  = 'PV_Results_6_NPV_10min.xlsx';
 RTP_file = 'RTP_grid_cost_10min.xlsx';
 
